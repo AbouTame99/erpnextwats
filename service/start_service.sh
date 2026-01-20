@@ -14,4 +14,4 @@ mkdir -p logs
 
 # Start the Node.js server in the background
 echo "Starting WhatsApp Service..."
-/usr/bin/node server.js > logs/output.log 2>&1 &
+/usr/bin/node /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/service/server.js > /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/service/logs/output.log 2>&1 &
