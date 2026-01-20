@@ -120,3 +120,12 @@ app.post('/message/send', async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
     console.log(`WhatsApp Multi-Session Service listening at http://127.0.0.1:${port}`);
 });
+
+// Prevent service from crashing on unhandled errors
+process.on('uncaughtException', (err) => {
+    console.error('There was an uncaught error', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
