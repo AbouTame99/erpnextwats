@@ -13,7 +13,7 @@ frappe.pages['whatsapp-chat'].on_page_load = function (wrapper) {
 erpnextwats.WhatsAppChat = class {
     constructor(page) {
         this.page = page;
-        this.service_url = 'http://localhost:3000'; // Port of our Node service
+        this.service_url = `${window.location.protocol}//${window.location.hostname}:3000`;
         this.prepare_layout();
         this.check_status();
     }
