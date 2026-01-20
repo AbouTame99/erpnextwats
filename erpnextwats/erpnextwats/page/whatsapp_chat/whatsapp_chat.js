@@ -72,19 +72,27 @@ erpnextwats.WhatsAppChat = class {
                     this.show_state('connected');
                 } else if (data.status === 'qr_ready') {
                     this.fetch_qr();
+                    this.show_state('qr');
                 } else if (data.status === 'initializing' || data.status === 'connecting') {
                     this.show_state('qr');
                     setTimeout(() => this.check_status(), 3000);
+                } else {
+                    this.show_state('init');
                 }
             },
             error: (e) => {
                 console.error("Service not reachable", e);
+                this.show_state('init');
             }
         });
     }
 
     async initialize_session() {
+        if (this.poll_interval) clearInterval(this.poll_interval);
         this.show_state('qr');
+        this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
+        this.$container.find('.status-text').text('Requesting session...');
+
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
@@ -96,12 +104,14 @@ erpnextwats.WhatsAppChat = class {
                 this.start_polling();
             },
             error: (e) => {
-                frappe.msgprint("Node.js service is not running. Please start it.");
+                frappe.msgprint("Node.js service error. Please check server logs.");
+                this.show_state('init');
             }
         });
     }
 
     start_polling() {
+        if (this.poll_interval) clearInterval(this.poll_interval);
         this.poll_interval = setInterval(() => {
             frappe.call({
                 method: 'erpnextwats.erpnextwats.api.proxy_to_service',
@@ -113,6 +123,7 @@ erpnextwats.WhatsAppChat = class {
                     const data = r.message || {};
                     if (data.status === 'qr_ready') {
                         this.fetch_qr();
+                        this.show_state('qr');
                     } else if (data.status === 'ready') {
                         clearInterval(this.poll_interval);
                         this.show_state('connected');
@@ -133,6 +144,7 @@ erpnextwats.WhatsAppChat = class {
             callback: (r) => {
                 const data = r.message || {};
                 if (data.qr) {
+                    this.show_state('qr');
                     this.$container.find('#qr-image').html(`<img src="${data.qr}" style="width: 100%;">`);
                     this.$container.find('.status-text').text('Scan now to connect');
                 }
