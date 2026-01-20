@@ -60,61 +60,84 @@ erpnextwats.WhatsAppChat = class {
     }
 
     async check_status() {
-        try {
-            const response = await fetch(`${this.service_url}/session/status/${frappe.session.user}`);
-            const data = await response.json();
-
-            if (data.status === 'ready') {
-                this.show_state('connected');
-            } else if (data.status === 'qr_ready') {
-                this.fetch_qr();
-            } else if (data.status === 'initializing' || data.status === 'connecting') {
-                this.show_state('qr');
-                setTimeout(() => this.check_status(), 3000);
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
+                method: 'GET',
+                path: `session/status/${frappe.session.user}`
+            },
+            callback: (r) => {
+                const data = r.message || {};
+                if (data.status === 'ready') {
+                    this.show_state('connected');
+                } else if (data.status === 'qr_ready') {
+                    this.fetch_qr();
+                } else if (data.status === 'initializing' || data.status === 'connecting') {
+                    this.show_state('qr');
+                    setTimeout(() => this.check_status(), 3000);
+                }
+            },
+            error: (e) => {
+                console.error("Service not reachable", e);
             }
-        } catch (e) {
-            console.error("Service not reachable", e);
-        }
+        });
     }
 
     async initialize_session() {
         this.show_state('qr');
-        try {
-            await fetch(`${this.service_url}/session/init`, {
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: frappe.session.user })
-            });
-            this.start_polling();
-        } catch (e) {
-            frappe.msgprint("Node.js service is not running. Please start it.");
-        }
+                path: 'session/init',
+                data: { userId: frappe.session.user }
+            },
+            callback: (r) => {
+                this.start_polling();
+            },
+            error: (e) => {
+                frappe.msgprint("Node.js service is not running. Please start it.");
+            }
+        });
     }
 
     start_polling() {
-        this.poll_interval = setInterval(async () => {
-            const response = await fetch(`${this.service_url}/session/status/${frappe.session.user}`);
-            const data = await response.json();
-
-            if (data.status === 'qr_ready') {
-                this.fetch_qr();
-            } else if (data.status === 'ready') {
-                clearInterval(this.poll_interval);
-                this.show_state('connected');
-                frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
-            }
+        this.poll_interval = setInterval(() => {
+            frappe.call({
+                method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+                args: {
+                    method: 'GET',
+                    path: `session/status/${frappe.session.user}`
+                },
+                callback: (r) => {
+                    const data = r.message || {};
+                    if (data.status === 'qr_ready') {
+                        this.fetch_qr();
+                    } else if (data.status === 'ready') {
+                        clearInterval(this.poll_interval);
+                        this.show_state('connected');
+                        frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
+                    }
+                }
+            });
         }, 3000);
     }
 
     async fetch_qr() {
-        try {
-            const response = await fetch(`${this.service_url}/session/qr/${frappe.session.user}`);
-            const data = await response.json();
-            if (data.qr) {
-                this.$container.find('#qr-image').html(`<img src="${data.qr}" style="width: 100%;">`);
-                this.$container.find('.status-text').text('Scan now to connect');
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
+                method: 'GET',
+                path: `session/qr/${frappe.session.user}`
+            },
+            callback: (r) => {
+                const data = r.message || {};
+                if (data.qr) {
+                    this.$container.find('#qr-image').html(`<img src="${data.qr}" style="width: 100%;">`);
+                    this.$container.find('.status-text').text('Scan now to connect');
+                }
             }
-        } catch (e) { }
+        });
     }
 
     show_state(state) {
@@ -125,7 +148,6 @@ erpnextwats.WhatsAppChat = class {
     }
 
     async disconnect_session() {
-        // Logic to tell Node service to destroy client
         this.show_state('init');
     }
 }
