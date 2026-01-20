@@ -64,7 +64,7 @@ erpnextwats.WhatsAppChat = class {
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
                 method: 'GET',
-                path: `session/status/${frappe.session.user}`
+                path: `api/whatsapp/status/${frappe.session.user}`
             },
             callback: (r) => {
                 const data = r.message || {};
@@ -97,7 +97,7 @@ erpnextwats.WhatsAppChat = class {
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
                 method: 'POST',
-                path: 'session/init',
+                path: 'api/whatsapp/init',
                 data: { userId: frappe.session.user }
             },
             callback: (r) => {
@@ -117,7 +117,7 @@ erpnextwats.WhatsAppChat = class {
                 method: 'erpnextwats.erpnextwats.api.proxy_to_service',
                 args: {
                     method: 'GET',
-                    path: `session/status/${frappe.session.user}`
+                    path: `api/whatsapp/status/${frappe.session.user}`
                 },
                 callback: (r) => {
                     const data = r.message || {};
@@ -139,7 +139,7 @@ erpnextwats.WhatsAppChat = class {
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
                 method: 'GET',
-                path: `session/qr/${frappe.session.user}`
+                path: `api/whatsapp/status/${frappe.session.user}`
             },
             callback: (r) => {
                 const data = r.message || {};
