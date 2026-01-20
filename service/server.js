@@ -117,6 +117,6 @@ app.post('/message/send', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`WhatsApp Multi-Session Service listening at http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+    console.log(`WhatsApp Multi-Session Service listening at http://127.0.0.1:${port}`);
 });

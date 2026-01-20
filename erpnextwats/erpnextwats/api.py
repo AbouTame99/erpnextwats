@@ -4,7 +4,7 @@ import requests
 @frappe.whitelist()
 def proxy_to_service(method, path, data=None):
     """Proxies requests from the Frappe frontend to the Node.js WhatsApp service."""
-    service_url = f"http://localhost:3000/{path}"
+    service_url = f"http://127.0.0.1:3000/{path}"
     
     try:
         if method.upper() == "GET":
