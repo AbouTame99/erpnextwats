@@ -19,6 +19,8 @@ def proxy_to_service(method, path, data=None):
         else:
             response = requests.post(service_url, json=data, timeout=5)
             
-        return response.json()
+        if response.status_code == 200 and response.text:
+            return response.json()
+        return {"status": "error", "message": f"Service returned {response.status_code}"}
     except Exception as e:
-        frappe.throw(f"WhatsApp Service error: {str(e)}")
+        return {"status": "error", "message": "WhatsApp service is not responding. Please ensure it is started."}
