@@ -10,8 +10,8 @@ if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null ; then
 fi
 
 # Ensure logs directory exists
-mkdir -p /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/service/logs
+mkdir -p logs
 
-# Start the Node.js server in the background using absolute path to node
+# Start the Node.js server in the background
 echo "Starting WhatsApp Service..."
-nohup /usr/bin/node /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/service/server.js > /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/service/logs/output.log 2>&1 &
+/usr/bin/node server.js > logs/output.log 2>&1 &
