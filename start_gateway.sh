@@ -17,3 +17,4 @@ fi
 # Start the gateway
 exec /usr/bin/node erpnextwats/whatsapp_gateway.js
 
+
