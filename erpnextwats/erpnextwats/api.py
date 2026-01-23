@@ -3,9 +3,9 @@ import requests
 
 @frappe.whitelist()
 def proxy_to_service(method, path, data=None):
-    """Proxies requests to the WhatsApp Gateway (Project 1)."""
-    # Use a setting for the URL, fallback to localhost for debugging
-    gateway_url = frappe.db.get_single_value('WhatsApp Settings', 'gateway_url') or "http://127.0.0.1:3000"
+    """Proxies requests to the WhatsApp Gateway."""
+    # Default gateway URL - runs on same server on port 3000
+    gateway_url = "http://127.0.0.1:3000"
     service_url = f"{gateway_url.rstrip('/')}/{path}"
     
     try:
@@ -25,4 +25,4 @@ def proxy_to_service(method, path, data=None):
             return response.json()
         return {"status": "error", "message": f"Gateway returned {response.status_code}: {response.text[:100]}"}
     except Exception as e:
-        return {"status": "error", "message": f"Could not reach Python WhatsApp Gateway at {gateway_url}. Ensure whatsapp_gateway.py is running."}
+        return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}. Ensure whatsapp_gateway.js is running."}

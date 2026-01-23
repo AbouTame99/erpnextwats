@@ -4,18 +4,8 @@
     "doctype": "DocType",
     "editable_grid": 1,
     "engine": "InnoDB",
-    "field_order": [
-        "gateway_url"
-    ],
-    "fields": [
-        {
-            "fieldname": "gateway_url",
-            "fieldtype": "Data",
-            "label": "WhatsApp Gateway URL",
-            "description": "The URL of Project 1 (e.g. https://crm.jiextrading.com)",
-            "reqd": 1
-        }
-    ],
+    "field_order": [],
+    "fields": [],
     "index_web_pages_for_search": 1,
     "issingle": 1,
     "links": [],
