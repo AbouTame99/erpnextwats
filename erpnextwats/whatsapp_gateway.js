@@ -18,9 +18,11 @@ class WhatsAppSession {
     }
 
     async initialize() {
+        console.log(`[${this.userId}] Starting initialization...`);
         this.status = 'initializing';
         
         // Create client with LocalAuth (stores session per user)
+        console.log(`[${this.userId}] Creating WhatsApp client...`);
         this.client = new Client({
             authStrategy: new LocalAuth({
                 clientId: `user_${this.userId}`
@@ -31,38 +33,58 @@ class WhatsAppSession {
             }
         });
 
+        // Loading event
+        this.client.on('loading_screen', (percent, message) => {
+            console.log(`[${this.userId}] Loading: ${percent}% - ${message}`);
+        });
+
         // QR code event
         this.client.on('qr', async (qr) => {
-            console.log(`QR Ready for ${this.userId}`);
+            console.log(`[${this.userId}] QR code received, converting to image...`);
             try {
                 this.qrCode = await qrcode.toDataURL(qr);
                 this.status = 'qr_ready';
+                console.log(`[${this.userId}] QR code ready! Status: ${this.status}, QR length: ${this.qrCode ? this.qrCode.length : 0}`);
             } catch (err) {
-                console.error('Error generating QR code:', err);
+                console.error(`[${this.userId}] Error generating QR code:`, err);
+                this.status = 'error';
             }
         });
 
         // Ready event
         this.client.on('ready', () => {
-            console.log(`Ready for ${this.userId}`);
+            console.log(`[${this.userId}] Client ready!`);
             this.status = 'ready';
             this.qrCode = null;
         });
 
         // Authentication failure
         this.client.on('auth_failure', (msg) => {
-            console.error(`Auth failure for ${this.userId}:`, msg);
+            console.error(`[${this.userId}] Auth failure:`, msg);
             this.status = 'auth_failure';
         });
 
         // Disconnected
         this.client.on('disconnected', (reason) => {
-            console.log(`Disconnected for ${this.userId}:`, reason);
+            console.log(`[${this.userId}] Disconnected:`, reason);
             this.status = 'disconnected';
         });
 
+        // Error event
+        this.client.on('error', (error) => {
+            console.error(`[${this.userId}] Client error:`, error);
+        });
+
         // Initialize client
-        await this.client.initialize();
+        try {
+            console.log(`[${this.userId}] Initializing client...`);
+            await this.client.initialize();
+            console.log(`[${this.userId}] Client initialization completed`);
+        } catch (error) {
+            console.error(`[${this.userId}] Error during initialization:`, error);
+            this.status = 'error';
+            throw error;
+        }
     }
 
     async sendMessage(to, message) {
@@ -86,13 +108,16 @@ class WhatsAppSession {
 // Initialize session
 app.post('/api/whatsapp/init', async (req, res) => {
     const userId = req.body.userId;
+    console.log(`[API] POST /api/whatsapp/init - userId: ${userId}`);
     
     if (!userId) {
+        console.log(`[API] Error: userId is required`);
         return res.status(400).json({ error: 'userId is required' });
     }
 
     // If session exists and is ready, return status
     if (sessions[userId]) {
+        console.log(`[API] Session exists for ${userId}, status: ${sessions[userId].status}`);
         if (sessions[userId].status === 'ready') {
             return res.json({ status: 'ready' });
         }
@@ -100,14 +125,16 @@ app.post('/api/whatsapp/init', async (req, res) => {
     }
 
     // Create new session
+    console.log(`[API] Creating new session for ${userId}`);
     const session = new WhatsAppSession(userId);
     sessions[userId] = session;
     
     try {
         await session.initialize();
+        console.log(`[API] Session initialized for ${userId}, returning status: ${session.status}`);
         res.json({ status: 'initializing' });
     } catch (error) {
-        console.error('Error initializing session:', error);
+        console.error(`[API] Error initializing session for ${userId}:`, error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -115,16 +142,20 @@ app.post('/api/whatsapp/init', async (req, res) => {
 // Get session status
 app.get('/api/whatsapp/status/:userId', (req, res) => {
     const userId = req.params.userId;
+    console.log(`[API] GET /api/whatsapp/status/${userId}`);
     
     if (!sessions[userId]) {
+        console.log(`[API] No session found for ${userId}`);
         return res.json({ status: 'disconnected' });
     }
 
     const session = sessions[userId];
-    res.json({
+    const response = {
         status: session.status,
         qr: session.qrCode
-    });
+    };
+    console.log(`[API] Status for ${userId}: ${session.status}, has QR: ${!!session.qrCode}`);
+    res.json(response);
 });
 
 // Send message
