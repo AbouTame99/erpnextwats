@@ -75,15 +75,23 @@ class WhatsAppSession {
             console.error(`[${this.userId}] Client error:`, error);
         });
 
-        // Initialize client
+        // Initialize client with timeout
         try {
             console.log(`[${this.userId}] Initializing client...`);
-            await this.client.initialize();
+            
+            // Set a timeout for initialization (30 seconds)
+            const initPromise = this.client.initialize();
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Initialization timeout after 30 seconds')), 30000);
+            });
+            
+            await Promise.race([initPromise, timeoutPromise]);
             console.log(`[${this.userId}] Client initialization completed`);
         } catch (error) {
             console.error(`[${this.userId}] Error during initialization:`, error);
+            console.error(`[${this.userId}] Error stack:`, error.stack);
             this.status = 'error';
-            throw error;
+            // Don't throw, let the session stay in error state
         }
     }
 
@@ -109,19 +117,33 @@ class WhatsAppSession {
 app.post('/api/whatsapp/init', async (req, res) => {
     const userId = req.body.userId;
     console.log(`[API] POST /api/whatsapp/init - userId: ${userId}`);
+    console.log(`[API] Request body:`, JSON.stringify(req.body));
     
     if (!userId) {
         console.log(`[API] Error: userId is required`);
         return res.status(400).json({ error: 'userId is required' });
     }
 
-    // If session exists and is ready, return status
+    // If session exists, check status
     if (sessions[userId]) {
         console.log(`[API] Session exists for ${userId}, status: ${sessions[userId].status}`);
         if (sessions[userId].status === 'ready') {
             return res.json({ status: 'ready' });
         }
-        return res.json({ status: sessions[userId].status });
+        // If stuck in initializing for too long, recreate
+        if (sessions[userId].status === 'initializing') {
+            console.log(`[API] Session stuck in initializing, cleaning up and recreating...`);
+            try {
+                if (sessions[userId].client) {
+                    await sessions[userId].client.destroy();
+                }
+            } catch (e) {
+                console.error(`[API] Error destroying old client:`, e);
+            }
+            delete sessions[userId];
+        } else {
+            return res.json({ status: sessions[userId].status });
+        }
     }
 
     // Create new session
@@ -129,14 +151,15 @@ app.post('/api/whatsapp/init', async (req, res) => {
     const session = new WhatsAppSession(userId);
     sessions[userId] = session;
     
-    try {
-        await session.initialize();
-        console.log(`[API] Session initialized for ${userId}, returning status: ${session.status}`);
-        res.json({ status: 'initializing' });
-    } catch (error) {
-        console.error(`[API] Error initializing session for ${userId}:`, error);
-        res.status(500).json({ error: error.message });
-    }
+    // Initialize asynchronously (don't wait for it)
+    console.log(`[API] Starting async initialization for ${userId}`);
+    session.initialize().catch(error => {
+        console.error(`[API] Async initialization error for ${userId}:`, error);
+    });
+    
+    // Return immediately
+    console.log(`[API] Returning initializing status for ${userId}`);
+    res.json({ status: 'initializing' });
 });
 
 // Get session status
