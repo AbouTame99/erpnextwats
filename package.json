@@ -2,6 +2,11 @@
   "name": "erpnextwats-gateway",
   "version": "1.0.0",
   "description": "WhatsApp Gateway for ERPNext using Baileys",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AbouTame99/erpnextwats.git"
+  },
   "main": "erpnextwats/whatsapp_gateway.js",
   "scripts": {
     "start": "node erpnextwats/whatsapp_gateway.js"
@@ -17,5 +22,3 @@
     "node": ">=18.0.0"
   }
 }
-
-
