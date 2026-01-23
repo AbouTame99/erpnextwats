@@ -88,6 +88,7 @@ erpnextwats.WhatsAppChat = class {
     }
 
     async initialize_session() {
+        console.log('[Frontend] Initializing session...');
         if (this.poll_interval) clearInterval(this.poll_interval);
         this.show_state('qr');
         this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
@@ -101,16 +102,21 @@ erpnextwats.WhatsAppChat = class {
                 data: { userId: frappe.session.user }
             },
             callback: (r) => {
+                console.log('[Frontend] Init response:', r);
+                const data = r.message || {};
+                console.log('[Frontend] Init status:', data.status);
                 this.start_polling();
             },
             error: (e) => {
-                frappe.msgprint("Node.js service error. Please check server logs.");
+                console.error('[Frontend] Init error:', e);
+                frappe.msgprint("Error initializing session. Please check server logs.");
                 this.show_state('init');
             }
         });
     }
 
     start_polling() {
+        console.log('[Frontend] Starting polling...');
         if (this.poll_interval) clearInterval(this.poll_interval);
         this.poll_interval = setInterval(() => {
             frappe.call({
@@ -121,17 +127,33 @@ erpnextwats.WhatsAppChat = class {
                 },
                 callback: (r) => {
                     const data = r.message || {};
+                    console.log('[Frontend] Polling status:', data.status);
+                    
                     if (data.status === 'qr_ready') {
+                        console.log('[Frontend] QR ready, fetching QR code...');
                         this.fetch_qr();
                         this.show_state('qr');
                     } else if (data.status === 'ready') {
+                        console.log('[Frontend] Connected!');
                         clearInterval(this.poll_interval);
                         this.show_state('connected');
                         frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
+                    } else if (data.status === 'initializing' || data.status === 'connecting') {
+                        console.log('[Frontend] Still initializing/connecting...');
+                        this.show_state('qr');
+                        this.$container.find('.status-text').text('Initializing... Please wait');
+                    } else if (data.status === 'error' || data.status === 'auth_failure') {
+                        console.error('[Frontend] Error status:', data.status);
+                        clearInterval(this.poll_interval);
+                        frappe.msgprint(`Connection error: ${data.status}. Please try again.`);
+                        this.show_state('init');
                     }
+                },
+                error: (e) => {
+                    console.error('[Frontend] Polling error:', e);
                 }
             });
-        }, 3000);
+        }, 2000); // Poll every 2 seconds for faster response
     }
 
     async fetch_qr() {
