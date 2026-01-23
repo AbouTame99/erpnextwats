@@ -1,20 +1,27 @@
+console.log('[WhatsApp Chat] Script loaded!');
+
 frappe.provide('erpnextwats');
 
 frappe.pages['whatsapp-chat'].on_page_load = function (wrapper) {
+    console.log('[WhatsApp Chat] Page load event triggered!');
     var page = frappe.ui.make_app_page({
         parent: wrapper,
         title: 'WhatsApp Office Workspace',
         single_column: true
     });
 
+    console.log('[WhatsApp Chat] Creating WhatsAppChat instance...');
     new erpnextwats.WhatsAppChat(page);
 }
 
 erpnextwats.WhatsAppChat = class {
     constructor(page) {
+        console.log('[WhatsApp Chat] Constructor called');
         this.page = page;
         this.service_url = `${window.location.protocol}//${window.location.hostname}:3000`;
+        console.log('[WhatsApp Chat] Service URL:', this.service_url);
         this.prepare_layout();
+        console.log('[WhatsApp Chat] Layout prepared, checking status...');
         this.check_status();
     }
 
