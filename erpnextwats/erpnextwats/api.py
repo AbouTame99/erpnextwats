@@ -25,4 +25,4 @@ def proxy_to_service(method, path, data=None):
             return response.json()
         return {"status": "error", "message": f"Gateway returned {response.status_code}: {response.text[:100]}"}
     except Exception as e:
-        return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}. Ensure Project 1 is running."}
+        return {"status": "error", "message": f"Could not reach Python WhatsApp Gateway at {gateway_url}. Ensure whatsapp_gateway.py is running."}
