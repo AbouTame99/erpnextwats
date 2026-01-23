@@ -14,20 +14,33 @@ bench install-app erpnextwats
 
 #### Automatic Dependency Installation
 
-**Node.js Dependencies** (whatsapp-web.js, qrcode, express) need to be installed:
+**Node.js Dependencies** (whatsapp-web.js, qrcode, express) are **automatically installed** when the gateway starts if `node_modules` doesn't exist.
+
+The startup script (`start_gateway.sh`) checks for dependencies and installs them automatically, so even after container reboots (where non-`/cloudclusters` data is reset), dependencies will be reinstalled automatically.
+
+**Manual installation** (optional, for first-time setup or troubleshooting):
 
 ```bash
-cd /path/to/frappe-bench/apps/erpnextwats
+cd /cloudclusters/erpnext/frappe-bench/apps/erpnextwats
 npm install
 ```
 
-**Note:** The WhatsApp gateway uses Node.js (`whatsapp-web.js`) instead of Python to avoid GLIBC compatibility issues. Node.js is already available in ERPNext installations.
+**Note:** 
+- The WhatsApp gateway uses Node.js (`whatsapp-web.js`) instead of Python to avoid GLIBC compatibility issues
+- Node.js is already available in ERPNext installations
+- Dependencies are stored in `/cloudclusters/erpnext/frappe-bench/apps/erpnextwats/node_modules` which persists across reboots
 
 #### Auto-Start WhatsApp Gateway on VPS Reboot (Supervisor)
 
 To make the WhatsApp gateway start automatically on reboot (recommended for production):
 
-1. **Copy the supervisor config** from `config/whatsapp_gateway.conf` to your supervisor directory:
+1. **Make the startup script executable**:
+
+```bash
+chmod +x /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/start_gateway.sh
+```
+
+2. **Copy the supervisor config** from `config/whatsapp_gateway.conf` to your supervisor directory:
 
 ```bash
 # On your VPS, copy to the location where supervisor reads configs
