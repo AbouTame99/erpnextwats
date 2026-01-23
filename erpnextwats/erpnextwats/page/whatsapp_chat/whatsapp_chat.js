@@ -68,20 +68,25 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 const data = r.message || {};
+                console.log('[Frontend] Initial status check:', data.status);
+                
                 if (data.status === 'ready') {
                     this.show_state('connected');
                 } else if (data.status === 'qr_ready') {
                     this.fetch_qr();
                     this.show_state('qr');
+                    this.start_polling(); // Start polling to check when ready
                 } else if (data.status === 'initializing' || data.status === 'connecting') {
                     this.show_state('qr');
-                    setTimeout(() => this.check_status(), 3000);
+                    this.$container.find('.status-text').text('Initializing... Please wait');
+                    this.start_polling(); // Start polling to get QR code
                 } else {
+                    // Disconnected or error - show init screen
                     this.show_state('init');
                 }
             },
             error: (e) => {
-                console.error("Service not reachable", e);
+                console.error("[Frontend] Service not reachable", e);
                 this.show_state('init');
             }
         });
