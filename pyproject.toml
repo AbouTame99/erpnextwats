@@ -9,10 +9,8 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
-    "neonize",
-    "fastapi",
-    "uvicorn",
-    "python-multipart",
+    # Note: WhatsApp gateway uses Node.js (whatsapp-web.js) instead of Python
+    # Install Node.js dependencies with: npm install (in apps/erpnextwats directory)
 ]
 
 [build-system]

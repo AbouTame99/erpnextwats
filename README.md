@@ -14,11 +14,14 @@ bench install-app erpnextwats
 
 #### Automatic Dependency Installation
 
-Dependencies (neonize, fastapi, uvicorn, python-multipart) are automatically installed when you run:
+**Node.js Dependencies** (whatsapp-web.js, qrcode, express) need to be installed:
 
 ```bash
-bench setup requirements
+cd /path/to/frappe-bench/apps/erpnextwats
+npm install
 ```
+
+**Note:** The WhatsApp gateway uses Node.js (`whatsapp-web.js`) instead of Python to avoid GLIBC compatibility issues. Node.js is already available in ERPNext installations.
 
 #### Auto-Start WhatsApp Gateway on VPS Reboot (Supervisor)
 
@@ -27,16 +30,13 @@ To make the WhatsApp gateway start automatically on reboot (recommended for prod
 1. **Copy the supervisor config** from `config/whatsapp_gateway.conf` to your supervisor directory:
 
 ```bash
-# On your VPS, replace /opt/frappe-bench with your actual bench path
-sudo cp /opt/frappe-bench/apps/erpnextwats/config/whatsapp_gateway.conf /etc/supervisor/conf.d/whatsapp_gateway.conf
+# On your VPS, copy to the location where supervisor reads configs
+# For CloudClusters/ERPNext setups, this is usually:
+cp /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/config/whatsapp_gateway.conf /cloudclusters/config/supervisor/whatsapp_gateway.conf
 
-# Edit the config file to match your bench path and user
-sudo nano /etc/supervisor/conf.d/whatsapp_gateway.conf
+# The config file already has the correct paths for CloudClusters setup
+# If using a different setup, edit paths accordingly
 ```
-
-2. **Update the paths** in the config file:
-   - Replace `/opt/frappe-bench` with your actual bench path
-   - Replace `frappe` with your bench user (usually `frappe`)
 
 3. **Reload and start Supervisor**:
 

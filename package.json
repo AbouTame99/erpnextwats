@@ -1,0 +1,18 @@
+{
+  "name": "erpnextwats-gateway",
+  "version": "1.0.0",
+  "description": "WhatsApp Gateway for ERPNext using whatsapp-web.js",
+  "main": "erpnextwats/whatsapp_gateway.js",
+  "scripts": {
+    "start": "node erpnextwats/whatsapp_gateway.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode": "^1.5.3",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
