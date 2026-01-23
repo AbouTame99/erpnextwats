@@ -165,6 +165,7 @@ app.post('/api/whatsapp/init', async (req, res) => {
     console.log(`[API] Creating new session for ${userId}`);
     const session = new WhatsAppSession(userId);
     sessions[userId] = session;
+    console.log(`[API] Session stored. Total sessions now: ${Object.keys(sessions).length}`);
     
     // Initialize asynchronously (don't wait for it)
     console.log(`[API] Starting async initialization for ${userId}`);
@@ -172,7 +173,12 @@ app.post('/api/whatsapp/init', async (req, res) => {
         console.error(`[API] Async initialization error for ${userId}:`, error);
         console.error(`[API] Error stack:`, error.stack);
         // Don't delete session on error, keep it so user can retry
-        session.status = 'error';
+        if (sessions[userId]) {
+            sessions[userId].status = 'error';
+            console.log(`[API] Session still exists after error, status set to error`);
+        } else {
+            console.error(`[API] WARNING: Session was deleted after error!`);
+        }
     });
     
     // Return immediately
@@ -184,9 +190,12 @@ app.post('/api/whatsapp/init', async (req, res) => {
 app.get('/api/whatsapp/status/:userId', (req, res) => {
     const userId = req.params.userId;
     console.log(`[API] GET /api/whatsapp/status/${userId}`);
+    console.log(`[API] Total sessions: ${Object.keys(sessions).length}`);
+    console.log(`[API] Session keys: ${Object.keys(sessions).join(', ')}`);
     
     if (!sessions[userId]) {
         console.log(`[API] No session found for ${userId}`);
+        console.log(`[API] Available sessions:`, Object.keys(sessions));
         return res.json({ status: 'disconnected' });
     }
 
@@ -195,7 +204,7 @@ app.get('/api/whatsapp/status/:userId', (req, res) => {
         status: session.status,
         qr: session.qrCode
     };
-    console.log(`[API] Status for ${userId}: ${session.status}, has QR: ${!!session.qrCode}`);
+    console.log(`[API] Status for ${userId}: ${session.status}, has QR: ${!!session.qrCode}, has sock: ${!!session.sock}`);
     res.json(response);
 });
 
