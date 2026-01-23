@@ -170,10 +170,13 @@ app.post('/api/whatsapp/init', async (req, res) => {
     console.log(`[API] Starting async initialization for ${userId}`);
     session.initialize().catch(error => {
         console.error(`[API] Async initialization error for ${userId}:`, error);
+        console.error(`[API] Error stack:`, error.stack);
+        // Don't delete session on error, keep it so user can retry
+        session.status = 'error';
     });
     
     // Return immediately
-    console.log(`[API] Returning initializing status for ${userId}`);
+    console.log(`[API] Returning initializing status for ${userId}, session stored:`, !!sessions[userId]);
     res.json({ status: 'initializing' });
 });
 

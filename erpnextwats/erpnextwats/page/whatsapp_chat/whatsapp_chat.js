@@ -88,8 +88,9 @@ erpnextwats.WhatsAppChat = class {
                     this.$container.find('.status-text').text('Initializing... Please wait');
                     this.start_polling(); // Start polling to get QR code
                 } else {
-                    // Disconnected or error - show init screen
-                    this.show_state('init');
+                    // Disconnected or error - auto-initialize to show QR
+                    console.log('[Frontend] Status is disconnected, auto-initializing...');
+                    this.initialize_session();
                 }
             },
             error: (e) => {
@@ -159,6 +160,14 @@ erpnextwats.WhatsAppChat = class {
                         clearInterval(this.poll_interval);
                         frappe.msgprint(`Connection error: ${data.status}. Please try again.`);
                         this.show_state('init');
+                    } else if (data.status === 'disconnected') {
+                        console.log('[Frontend] Status is disconnected during polling, re-initializing...');
+                        clearInterval(this.poll_interval);
+                        this.initialize_session();
+                    } else if (data.status === 'initializing' || data.status === 'connecting') {
+                        console.log('[Frontend] Still initializing/connecting...');
+                        this.show_state('qr');
+                        this.$container.find('.status-text').text('Initializing... Please wait');
                     }
                 },
                 error: (e) => {
