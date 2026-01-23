@@ -34,13 +34,9 @@ npm install
 
 To make the WhatsApp gateway start automatically on reboot (recommended for production):
 
-1. **Make the startup script executable**:
+1. **Copy the supervisor config** from `config/whatsapp_gateway.conf` to your supervisor directory:
 
-```bash
-chmod +x /cloudclusters/erpnext/frappe-bench/apps/erpnextwats/start_gateway.sh
-```
-
-2. **Copy the supervisor config** from `config/whatsapp_gateway.conf` to your supervisor directory:
+**Note:** The supervisor config automatically sets execute permissions on the startup script, so no manual `chmod` is needed (handles CloudClusters container reboots where permissions are reset).
 
 ```bash
 # On your VPS, copy to the location where supervisor reads configs
