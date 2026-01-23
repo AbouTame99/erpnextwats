@@ -7,7 +7,7 @@
     "start": "node erpnextwats/whatsapp_gateway.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@whiskeysockets/baileys": "^6.7.21",
     "@hapi/boom": "^10.0.1",
     "qrcode": "^1.5.3",
     "express": "^4.18.2",
