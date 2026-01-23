@@ -26,7 +26,7 @@ class WhatsAppSession {
     async initialize() {
         console.log(`[${this.userId}] Starting initialization...`);
         this.status = 'initializing';
-        
+
         try {
             // Ensure auth directory exists
             if (!fs.existsSync(this.authDir)) {
@@ -51,7 +51,7 @@ class WhatsAppSession {
             // Connection update event (handles QR, connection, etc.)
             this.sock.ev.on('connection.update', (update) => {
                 const { connection, lastDisconnect, qr } = update;
-                
+
                 if (qr) {
                     console.log(`[${this.userId}] QR code received, converting to image...`);
                     qrcode.toDataURL(qr).then(qrImage => {
@@ -67,10 +67,12 @@ class WhatsAppSession {
                 if (connection === 'close') {
                     const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
                     console.log(`[${this.userId}] Connection closed. Should reconnect: ${shouldReconnect}`);
-                    
+
                     if (shouldReconnect) {
-                        this.status = 'disconnected';
-                        // Auto-reconnect logic could go here
+                        this.status = 'connecting';
+                        console.log(`[${this.userId}] Auto-reconnecting...`);
+                        // Add a small delay before reconnecting
+                        setTimeout(() => this.initialize(), 2000);
                     } else {
                         this.status = 'logged_out';
                         // Clean up auth files
@@ -107,13 +109,13 @@ class WhatsAppSession {
         if (!this.sock || this.status !== 'ready') {
             throw new Error('Session not ready');
         }
-        
+
         // Format phone number (remove + and ensure it's in international format)
         let phoneNumber = to.replace(/[^0-9]/g, ''); // Remove all non-digits
         if (!phoneNumber.endsWith('@s.whatsapp.net')) {
             phoneNumber = `${phoneNumber}@s.whatsapp.net`;
         }
-        
+
         console.log(`[${this.userId}] Sending message to ${phoneNumber}`);
         await this.sock.sendMessage(phoneNumber, { text: message });
     }
@@ -133,7 +135,7 @@ app.post('/api/whatsapp/init', async (req, res) => {
     const userId = req.body.userId;
     console.log(`[API] POST /api/whatsapp/init - userId: ${userId}`);
     console.log(`[API] Request body:`, JSON.stringify(req.body));
-    
+
     if (!userId) {
         console.log(`[API] Error: userId is required`);
         return res.status(400).json({ error: 'userId is required' });
@@ -142,23 +144,22 @@ app.post('/api/whatsapp/init', async (req, res) => {
     // If session exists, check status
     if (sessions[userId]) {
         console.log(`[API] Session exists for ${userId}, status: ${sessions[userId].status}`);
+        // If session exists
         if (sessions[userId].status === 'ready') {
             return res.json({ status: 'ready' });
         }
-        // If stuck in initializing for too long, recreate
-        if (sessions[userId].status === 'initializing' || sessions[userId].status === 'connecting') {
-            console.log(`[API] Session stuck, cleaning up and recreating...`);
-            try {
-                if (sessions[userId].sock) {
-                    await sessions[userId].sock.end();
-                }
-            } catch (e) {
-                console.error(`[API] Error destroying old socket:`, e);
+
+        // If session exists but is not ready (initializing, connecting, disconnected, error),
+        // clean it up and create a new one.
+        console.log(`[API] Session exists for ${userId} with status '${sessions[userId].status}', recreating...`);
+        try {
+            if (sessions[userId].sock) {
+                await sessions[userId].sock.end();
             }
-            delete sessions[userId];
-        } else {
-            return res.json({ status: sessions[userId].status });
+        } catch (e) {
+            console.error(`[API] Error destroying old socket:`, e);
         }
+        delete sessions[userId];
     }
 
     // Create new session
@@ -166,7 +167,7 @@ app.post('/api/whatsapp/init', async (req, res) => {
     const session = new WhatsAppSession(userId);
     sessions[userId] = session;
     console.log(`[API] Session stored. Total sessions now: ${Object.keys(sessions).length}`);
-    
+
     // Initialize asynchronously (don't wait for it)
     console.log(`[API] Starting async initialization for ${userId}`);
     session.initialize().catch(error => {
@@ -180,7 +181,7 @@ app.post('/api/whatsapp/init', async (req, res) => {
             console.error(`[API] WARNING: Session was deleted after error!`);
         }
     });
-    
+
     // Return immediately
     console.log(`[API] Returning initializing status for ${userId}, session stored:`, !!sessions[userId]);
     res.json({ status: 'initializing' });
@@ -192,7 +193,7 @@ app.get('/api/whatsapp/status/:userId', (req, res) => {
     console.log(`[API] GET /api/whatsapp/status/${userId}`);
     console.log(`[API] Total sessions: ${Object.keys(sessions).length}`);
     console.log(`[API] Session keys: ${Object.keys(sessions).join(', ')}`);
-    
+
     if (!sessions[userId]) {
         console.log(`[API] No session found for ${userId}`);
         console.log(`[API] Available sessions:`, Object.keys(sessions));
@@ -228,7 +229,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
 // Disconnect session
 app.post('/api/whatsapp/disconnect', async (req, res) => {
     const userId = req.body.userId;
-    
+
     if (sessions[userId]) {
         await sessions[userId].disconnect();
         delete sessions[userId];
