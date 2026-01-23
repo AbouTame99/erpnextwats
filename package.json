@@ -1,16 +1,17 @@
 {
   "name": "erpnextwats-gateway",
   "version": "1.0.0",
-  "description": "WhatsApp Gateway for ERPNext using whatsapp-web.js",
+  "description": "WhatsApp Gateway for ERPNext using Baileys",
   "main": "erpnextwats/whatsapp_gateway.js",
   "scripts": {
     "start": "node erpnextwats/whatsapp_gateway.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.23.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "@hapi/boom": "^10.0.1",
     "qrcode": "^1.5.3",
     "express": "^4.18.2",
-    "puppeteer": "^21.0.0"
+    "pino": "^8.16.0"
   },
   "engines": {
     "node": ">=18.0.0"

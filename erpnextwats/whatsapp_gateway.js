@@ -1,6 +1,11 @@
 const express = require('express');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const { useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
+const pino = require('pino');
+const path = require('path');
+const fs = require('fs');
 const app = express();
 const port = 3000;
 
@@ -14,100 +19,110 @@ class WhatsAppSession {
         this.userId = userId;
         this.status = 'init';
         this.qrCode = null;
-        this.client = null;
+        this.sock = null;
+        this.authDir = path.join(__dirname, 'auth', `user_${userId}`);
     }
 
     async initialize() {
         console.log(`[${this.userId}] Starting initialization...`);
         this.status = 'initializing';
         
-        // Create client with LocalAuth (stores session per user)
-        console.log(`[${this.userId}] Creating WhatsApp client...`);
-        this.client = new Client({
-            authStrategy: new LocalAuth({
-                clientId: `user_${this.userId}`
-            }),
-            puppeteer: {
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox']
-            }
-        });
-
-        // Loading event
-        this.client.on('loading_screen', (percent, message) => {
-            console.log(`[${this.userId}] Loading: ${percent}% - ${message}`);
-        });
-
-        // QR code event
-        this.client.on('qr', async (qr) => {
-            console.log(`[${this.userId}] QR code received, converting to image...`);
-            try {
-                this.qrCode = await qrcode.toDataURL(qr);
-                this.status = 'qr_ready';
-                console.log(`[${this.userId}] QR code ready! Status: ${this.status}, QR length: ${this.qrCode ? this.qrCode.length : 0}`);
-            } catch (err) {
-                console.error(`[${this.userId}] Error generating QR code:`, err);
-                this.status = 'error';
-            }
-        });
-
-        // Ready event
-        this.client.on('ready', () => {
-            console.log(`[${this.userId}] Client ready!`);
-            this.status = 'ready';
-            this.qrCode = null;
-        });
-
-        // Authentication failure
-        this.client.on('auth_failure', (msg) => {
-            console.error(`[${this.userId}] Auth failure:`, msg);
-            this.status = 'auth_failure';
-        });
-
-        // Disconnected
-        this.client.on('disconnected', (reason) => {
-            console.log(`[${this.userId}] Disconnected:`, reason);
-            this.status = 'disconnected';
-        });
-
-        // Error event
-        this.client.on('error', (error) => {
-            console.error(`[${this.userId}] Client error:`, error);
-        });
-
-        // Initialize client with timeout
         try {
-            console.log(`[${this.userId}] Initializing client...`);
-            
-            // Set a timeout for initialization (30 seconds)
-            const initPromise = this.client.initialize();
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Initialization timeout after 30 seconds')), 30000);
+            // Ensure auth directory exists
+            if (!fs.existsSync(this.authDir)) {
+                fs.mkdirSync(this.authDir, { recursive: true });
+            }
+
+            // Load auth state
+            console.log(`[${this.userId}] Loading auth state from ${this.authDir}...`);
+            const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+
+            // Create socket
+            console.log(`[${this.userId}] Creating WhatsApp socket...`);
+            this.sock = makeWASocket({
+                auth: state,
+                printQRInTerminal: false,
+                logger: pino({ level: 'silent' }), // Suppress Baileys logs
             });
-            
-            await Promise.race([initPromise, timeoutPromise]);
-            console.log(`[${this.userId}] Client initialization completed`);
+
+            // Save credentials when updated
+            this.sock.ev.on('creds.update', saveCreds);
+
+            // Connection update event (handles QR, connection, etc.)
+            this.sock.ev.on('connection.update', (update) => {
+                const { connection, lastDisconnect, qr } = update;
+                
+                if (qr) {
+                    console.log(`[${this.userId}] QR code received, converting to image...`);
+                    qrcode.toDataURL(qr).then(qrImage => {
+                        this.qrCode = qrImage;
+                        this.status = 'qr_ready';
+                        console.log(`[${this.userId}] QR code ready! Status: ${this.status}`);
+                    }).catch(err => {
+                        console.error(`[${this.userId}] Error generating QR code:`, err);
+                        this.status = 'error';
+                    });
+                }
+
+                if (connection === 'close') {
+                    const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                    console.log(`[${this.userId}] Connection closed. Should reconnect: ${shouldReconnect}`);
+                    
+                    if (shouldReconnect) {
+                        this.status = 'disconnected';
+                        // Auto-reconnect logic could go here
+                    } else {
+                        this.status = 'logged_out';
+                        // Clean up auth files
+                        if (fs.existsSync(this.authDir)) {
+                            fs.rmSync(this.authDir, { recursive: true, force: true });
+                        }
+                    }
+                } else if (connection === 'open') {
+                    console.log(`[${this.userId}] Connected and ready!`);
+                    this.status = 'ready';
+                    this.qrCode = null;
+                } else if (connection === 'connecting') {
+                    console.log(`[${this.userId}] Connecting...`);
+                    this.status = 'connecting';
+                }
+            });
+
+            // Handle errors
+            this.sock.ev.on('error', (error) => {
+                console.error(`[${this.userId}] Socket error:`, error);
+                this.status = 'error';
+            });
+
+            console.log(`[${this.userId}] Socket created successfully`);
         } catch (error) {
             console.error(`[${this.userId}] Error during initialization:`, error);
             console.error(`[${this.userId}] Error stack:`, error.stack);
             this.status = 'error';
-            // Don't throw, let the session stay in error state
+            throw error;
         }
     }
 
     async sendMessage(to, message) {
-        if (!this.client || this.status !== 'ready') {
+        if (!this.sock || this.status !== 'ready') {
             throw new Error('Session not ready');
         }
         
-        // Format phone number (remove + and ensure it's international format)
-        const chatId = to.includes('@') ? to : `${to}@c.us`;
-        await this.client.sendMessage(chatId, message);
+        // Format phone number (remove + and ensure it's in international format)
+        let phoneNumber = to.replace(/[^0-9]/g, ''); // Remove all non-digits
+        if (!phoneNumber.endsWith('@s.whatsapp.net')) {
+            phoneNumber = `${phoneNumber}@s.whatsapp.net`;
+        }
+        
+        console.log(`[${this.userId}] Sending message to ${phoneNumber}`);
+        await this.sock.sendMessage(phoneNumber, { text: message });
     }
 
     async disconnect() {
-        if (this.client) {
-            await this.client.destroy();
+        if (this.sock) {
+            console.log(`[${this.userId}] Disconnecting...`);
+            await this.sock.end();
+            this.sock = null;
             this.status = 'disconnected';
         }
     }
@@ -131,14 +146,14 @@ app.post('/api/whatsapp/init', async (req, res) => {
             return res.json({ status: 'ready' });
         }
         // If stuck in initializing for too long, recreate
-        if (sessions[userId].status === 'initializing') {
-            console.log(`[API] Session stuck in initializing, cleaning up and recreating...`);
+        if (sessions[userId].status === 'initializing' || sessions[userId].status === 'connecting') {
+            console.log(`[API] Session stuck, cleaning up and recreating...`);
             try {
-                if (sessions[userId].client) {
-                    await sessions[userId].client.destroy();
+                if (sessions[userId].sock) {
+                    await sessions[userId].sock.end();
                 }
             } catch (e) {
-                console.error(`[API] Error destroying old client:`, e);
+                console.error(`[API] Error destroying old socket:`, e);
             }
             delete sessions[userId];
         } else {
@@ -193,7 +208,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
         await sessions[userId].sendMessage(to, message);
         res.json({ status: 'success' });
     } catch (error) {
-        console.error('Failed to send message:', error);
+        console.error(`[API] Failed to send message:`, error);
         res.status(500).json({ status: 'error', message: error.message });
     }
 });
@@ -217,7 +232,5 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(port, '0.0.0.0', () => {
-    console.log(`WhatsApp Gateway running on port ${port}`);
+    console.log(`WhatsApp Gateway running on port ${port} (using Baileys)`);
 });
-
-
