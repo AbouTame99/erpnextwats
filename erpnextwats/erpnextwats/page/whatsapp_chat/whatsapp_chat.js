@@ -37,12 +37,20 @@ erpnextwats.WhatsAppChat = class {
     }
 
     prepare_layout() {
-        this.id = frappe.session.user; // Set user ID
-        this.notif_sound = new Audio('https://cdn.pixabay.com/download/audio/2022/03/15/audio_7303c73491.mp3?filename=notification-1-103348.mp3'); // Set notification sound
+        console.log('[WhatsApp Chat] Preparing layout...');
+        try {
+            this.id = frappe.session.user; // Set user ID
+            // More stable notification sound
+            this.notif_sound = new Audio('https://www.soundjay.com/buttons/beep-07a.mp3');
+            this.notif_sound.load(); // Preload
 
-        this.page.main.html(`
+            this.page.main.html(`
 			<div class="whatsapp-wrapper">
 				<div id="wats-container">
+                    <div class="wats-loading" style="text-align: center; padding: 100px;">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <p class="text-muted mt-3">Connecting to WhatsApp Gateway...</p>
+                    </div>
                     <!-- Setup Screen -->
 					<div class="wats-init setup-screen">
 						<i class="fa fa-whatsapp main-icon"></i>
@@ -130,9 +138,13 @@ erpnextwats.WhatsAppChat = class {
 			</div>
 		`);
 
-        this.inject_styles();
-        this.$container = this.page.main.find('#wats-container');
-        this.bind_events();
+            this.inject_styles();
+            this.$container = this.page.main.find('#wats-container');
+            this.bind_events();
+        } catch (e) {
+            console.error('[WhatsApp Chat] Layout preparation failed:', e);
+            frappe.msgprint(__('Failed to initialize WhatsApp layout: ' + e.message));
+        }
     }
 
     inject_styles() {
@@ -369,7 +381,7 @@ erpnextwats.WhatsAppChat = class {
     }
 
     show_state(state) {
-        this.$container.find('.setup-screen, .chat-app').hide();
+        this.$container.find('.setup-screen, .chat-app, .wats-loading').hide();
         if (state === 'init') this.$container.find('.wats-init').show();
         if (state === 'qr') this.$container.find('.wats-qr').show();
         if (state === 'connected') {

@@ -14,6 +14,10 @@ const io = socketIo(server, {
 });
 const port = 3000;
 
+// Explicit path for persistence on CloudClusters
+const BASE_AUTH_DIR = '/cloudclusters/erpnext/frappe-bench/whatsapp_auth';
+if (!fs.existsSync(BASE_AUTH_DIR)) fs.mkdirSync(BASE_AUTH_DIR, { recursive: true });
+
 // Increase payload limits for media attachments (base64)
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ limit: '60mb', extended: true }));
@@ -29,22 +33,22 @@ function getSafeId(userId) {
 
 class WhatsAppSession {
     constructor(userId) {
-        this.userId = userId; // Original email for logging
+        this.userId = userId; // Original email
+        this.safeId = getSafeId(userId); // Sanitized for paths/sockets
         this.status = 'init';
         this.qrCode = null;
         this.client = null;
-        this.authDir = path.join(__dirname, 'wwebjs_auth');
+        this.authDir = BASE_AUTH_DIR;
         this.db = null;
         this.dbPath = null;
     }
 
     async initialize() {
-        console.log(`[${this.userId}] Starting initialization...`);
+        console.log(`[${this.userId}] Starting initialization (SafeID: ${this.safeId})...`);
         this.status = 'initializing';
 
         try {
-            const safeClientId = getSafeId(this.userId);
-            this.dbPath = path.join(this.authDir, `session-${safeClientId}`, 'history.db');
+            this.dbPath = path.join(this.authDir, `session-${this.safeId}`, 'history.db');
 
             // Ensure session directory exists for DB
             const sessDir = path.dirname(this.dbPath);
@@ -55,7 +59,7 @@ class WhatsAppSession {
 
             this.client = new Client({
                 authStrategy: new LocalAuth({
-                    clientId: safeClientId,
+                    clientId: this.safeId,
                     dataPath: this.authDir
                 }),
                 puppeteer: {
@@ -87,7 +91,9 @@ class WhatsAppSession {
 
             this.client.on('message', async (msg) => {
                 await this.saveMessage(msg);
+                // Emit on both original and safe ID to be absolutely safe
                 io.emit(`new_message:${this.userId}`, { chatId: msg.from, messageId: msg.id._serialized });
+                io.emit(`new_message:${this.safeId}`, { chatId: msg.from, messageId: msg.id._serialized });
             });
 
             this.client.on('message_create', async (msg) => {
@@ -313,10 +319,10 @@ app.get('/api/whatsapp/status/:userId', (req, res) => {
 
     if (!sessions[userId]) {
         // Self-healing: check if file exists on disk
-        const authDir = path.join(__dirname, 'wwebjs_auth', `session-${userId}`);
-        if (fs.existsSync(authDir)) {
-            console.log(`[API] Session ${userId} found on disk but not in memory. Auto-initializing...`);
-            const session = new WhatsAppSession(rawUserId); // Use raw email for logging
+        const sessionPath = path.join(BASE_AUTH_DIR, `session-${userId}`);
+        if (fs.existsSync(sessionPath)) {
+            console.log(`[API] Session ${userId} found on disk. Auto-initializing...`);
+            const session = new WhatsAppSession(userId); // We'll use the safeId as userId if we don't have the email
             sessions[userId] = session;
             session.initialize().catch(err => console.error(`[API] Auto-init failed:`, err));
             return res.json({ status: 'initializing' });
@@ -412,28 +418,19 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Function to resume sessions from disk on startup
 async function resumeSessions() {
-    const authDir = path.join(__dirname, 'wwebjs_auth');
-    if (!fs.existsSync(authDir)) return;
+    console.log(`[BOOT] Scanning ${BASE_AUTH_DIR} for sessions...`);
+    if (!fs.existsSync(BASE_AUTH_DIR)) return;
 
-    const dirs = fs.readdirSync(authDir);
-    console.log(`[BOOT] Found ${dirs.length} potential session(s) on disk.`);
+    const dirs = fs.readdirSync(BASE_AUTH_DIR);
+    console.log(`[BOOT] Found ${dirs.length} items on disk.`);
 
     for (const dir of dirs) {
         if (dir.startsWith('session-')) {
             const safeId = dir.replace('session-', '');
-            // We need the original userId to map back, but since we sanitized it,
-            // we'll assume the safeId is what the frontend will use for mapping
-            // or we'll allow the status check to "claim" the session by its original ID.
+            console.log(`[BOOT] Resuming session: ${safeId}`);
 
-            // For now, let's just initialize it so the client stays alive.
-            // When the user opens their dashboard, the frontend sends the original email.
-            // We'll update the status check to match sanitized IDs.
-            console.log(`[BOOT] Resuming session for sanitized ID: ${safeId}`);
-
-            // Note: We don't have the original 'userId' (email) here, only the sanitized one.
-            // But WhatsAppSession uses userId for logging and clientId for auth.
-            // Let's create a "System" session for now, it will be replaced/mapped correctly 
-            // once the user performs a status check or init call with their email.
+            // We initialize using the safeId. 
+            // When the user later hits /status with their email, it will map to this safeId.
             const session = new WhatsAppSession(safeId);
             sessions[safeId] = session;
             session.initialize().catch(err => console.error(`[BOOT] Failed to resume ${safeId}:`, err));
