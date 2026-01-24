@@ -356,7 +356,7 @@ erpnextwats.WhatsAppChat = class {
             });
         }, 3000);
     }
-
+    
     render_qr(qrData) {
         if (this.last_qr === qrData) return;
         this.last_qr = qrData;

@@ -77,7 +77,7 @@ class WhatsAppSession {
 
             const browserOptions = {
                 headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-extensions']
             };
 
             const customPath = getBrowserPath();
@@ -92,7 +92,7 @@ class WhatsAppSession {
                 }),
                 webVersionCache: {
                     type: 'remote',
-                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2413.51.html'
                 },
                 puppeteer: browserOptions
             });
@@ -246,7 +246,26 @@ class WhatsAppSession {
             // Some "markedUnread" errors are non-fatal internal puppeteer errors, 
             // the message might actually have been sent.
             if (e.message.includes('markedUnread')) {
-                console.warn(`[${this.userId}] Ignored internal library error 'markedUnread'`);
+                console.warn(`[${this.userId}] Ignored internal library error 'markedUnread' - Manually saving placeholder`);
+
+                // Construct a synthetic sent message to ensure it shows up in DB
+                const syntheticMsg = {
+                    id: { _serialized: 'synthetic-' + Date.now() },
+                    from: 'me', // Will be handled correctly by saveMessage
+                    to: chatId,
+                    body: message,
+                    timestamp: Math.floor(Date.now() / 1000),
+                    fromMe: true,
+                    type: mediaData ? 'media' : 'chat',
+                    hasMedia: !!mediaData,
+                    fileName: mediaData ? mediaData.filename : null
+                };
+
+                // We need to slightly adjust how saveMessage handles 'me' sender
+                // Actually, let's just use the correct JIDs
+                syntheticMsg.from = this.client.info.wid._serialized;
+
+                await this.saveMessage(syntheticMsg);
                 return { status: 'maybe_sent', warning: e.message };
             }
             throw e;
