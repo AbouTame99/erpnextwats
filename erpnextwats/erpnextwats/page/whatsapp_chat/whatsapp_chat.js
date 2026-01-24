@@ -39,10 +39,10 @@ erpnextwats.WhatsAppChat = class {
     prepare_layout() {
         console.log('[WhatsApp Chat] Preparing layout...');
         try {
-            this.id = frappe.session.user; // Set user ID
-            // More stable notification sound
-            this.notif_sound = new Audio('https://www.soundjay.com/buttons/beep-07a.mp3');
-            this.notif_sound.load(); // Preload
+            this.id = frappe.session.user;
+            // Use a more reliable sound or a silent fallback
+            this.notif_sound = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
+            this.notif_sound.load();
 
             this.page.main.html(`
 			<div class="whatsapp-wrapper">
@@ -284,6 +284,11 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 const data = r.message || {};
+                if (data.status === 'error') {
+                    frappe.show_alert({ message: __('Gateway error: ' + data.message), indicator: 'red' });
+                    this.show_state('init');
+                    return;
+                }
                 if (data.status === 'ready') {
                     this.show_state('connected');
                     this.fetch_chats();
@@ -399,7 +404,10 @@ erpnextwats.WhatsAppChat = class {
             return;
         }
 
-        this.socket = io('http://127.0.0.1:3000');
+        // Use the VPS domain but port 3000
+        const socketUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
+        console.log('[Socket] Connecting to:', socketUrl);
+        this.socket = io(socketUrl, { transports: ['websocket', 'polling'] });
 
         this.socket.on('connect', () => {
             console.log('[Socket] Connected to gateway');
