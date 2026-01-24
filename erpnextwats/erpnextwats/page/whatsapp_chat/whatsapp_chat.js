@@ -18,12 +18,28 @@ erpnextwats.WhatsAppChat = class {
     constructor(page) {
         console.log('[WhatsApp Chat] Constructor called');
         this.page = page;
+        this.socket = null; // Initialize socket here
+        this.refresh(); // Call refresh to set up layout and check status
+    }
+
+    refresh() {
+        this.page.clear_primary_action();
+        this.page.clear_secondary_action();
+
+        // Inject Socket.io Client
+        if (!window.io) {
+            frappe.dom.add_script('https://cdn.socket.io/4.7.2/socket.io.min.js');
+        }
+
         this.prepare_layout();
         console.log('[WhatsApp Chat] Layout prepared, checking status...');
         this.check_status();
     }
 
     prepare_layout() {
+        this.id = frappe.session.user; // Set user ID
+        this.notif_sound = new Audio('https://cdn.pixabay.com/download/audio/2022/03/15/audio_7303c73491.mp3?filename=notification-1-103348.mp3'); // Set notification sound
+
         this.page.main.html(`
 			<div class="whatsapp-wrapper">
 				<div id="wats-container">
@@ -356,7 +372,51 @@ erpnextwats.WhatsAppChat = class {
         this.$container.find('.setup-screen, .chat-app').hide();
         if (state === 'init') this.$container.find('.wats-init').show();
         if (state === 'qr') this.$container.find('.wats-qr').show();
-        if (state === 'connected') this.$container.find('.wats-connected').show();
+        if (state === 'connected') {
+            this.$container.find('.wats-connected').show();
+            this.init_socket();
+        }
+    }
+
+    init_socket() {
+        if (this.socket) return;
+
+        // Wait for script to load
+        if (!window.io) {
+            setTimeout(() => this.init_socket(), 1000);
+            return;
+        }
+
+        this.socket = io('http://127.0.0.1:3000');
+
+        this.socket.on('connect', () => {
+            console.log('[Socket] Connected to gateway');
+        });
+
+        this.socket.on(`new_message:${this.id}`, (data) => {
+            console.log('[Socket] New message received:', data);
+
+            // 1. Play sound
+            this.notif_sound.play().catch(e => console.warn("Sound blocked by browser", e));
+
+            // 2. Refresh active chat if it matches
+            if (this.current_chat_id === data.chatId) {
+                this.fetch_messages(this.current_chat_id);
+            }
+
+            // 3. Always refresh chat list to show unread count/last message
+            this.fetch_chats();
+
+            // 4. Show Browser Notification
+            if (Notification.permission === "granted") {
+                new Notification("New WhatsApp Message", {
+                    body: "You have a new message.",
+                    icon: "https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg"
+                });
+            } else if (Notification.permission !== "denied") {
+                Notification.requestPermission();
+            }
+        });
     }
 
     async disconnect_session() {

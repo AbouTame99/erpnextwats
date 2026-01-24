@@ -1,13 +1,22 @@
 const express = require('express');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const puppeteer = require('puppeteer');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
+const puppeteer = require('puppeteer-core');
+const sqlite3 = require('sqlite3').verbose();
+const http = require('http');
+const socketIo = require('socket.io');
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: { origin: "*" }
+});
 const port = 3000;
 
-app.use(express.json());
+// Increase payload limits for media attachments (base64)
+app.use(express.json({ limit: '60mb' }));
+app.use(express.urlencoded({ limit: '60mb', extended: true }));
 
 // Global state to track sessions
 const sessions = {};
@@ -25,6 +34,8 @@ class WhatsAppSession {
         this.qrCode = null;
         this.client = null;
         this.authDir = path.join(__dirname, 'wwebjs_auth');
+        this.db = null;
+        this.dbPath = null;
     }
 
     async initialize() {
@@ -32,10 +43,16 @@ class WhatsAppSession {
         this.status = 'initializing';
 
         try {
-            // Sanitize userId for clientId (only alphanumeric, _, - allowed)
             const safeClientId = getSafeId(this.userId);
+            this.dbPath = path.join(this.authDir, `session-${safeClientId}`, 'history.db');
 
-            // Create client with LocalAuth
+            // Ensure session directory exists for DB
+            const sessDir = path.dirname(this.dbPath);
+            if (!fs.existsSync(sessDir)) fs.mkdirSync(sessDir, { recursive: true });
+
+            this.db = new sqlite3.Database(this.dbPath);
+            this.initDb();
+
             this.client = new Client({
                 authStrategy: new LocalAuth({
                     clientId: safeClientId,
@@ -48,57 +65,104 @@ class WhatsAppSession {
                 }
             });
 
-            this.bindEvents();
+            this.client.on('qr', (qr) => {
+                console.log(`[${this.userId}] QR received`);
+                this.status = 'qr_ready';
+                qrcode.toDataURL(qr, (err, url) => {
+                    this.qrCode = url;
+                });
+            });
 
-            console.log(`[${this.userId}] Initializing client...`);
+            this.client.on('authenticated', () => {
+                console.log(`[${this.userId}] Authenticated successfully! Syncing...`);
+                this.status = 'authenticated';
+                this.qrCode = null;
+            });
+
+            this.client.on('ready', () => {
+                console.log(`[${this.userId}] Client is ready!`);
+                this.status = 'ready';
+                this.syncHistory();
+            });
+
+            this.client.on('message', async (msg) => {
+                await this.saveMessage(msg);
+                io.emit(`new_message:${this.userId}`, { chatId: msg.from, messageId: msg.id._serialized });
+            });
+
+            this.client.on('message_create', async (msg) => {
+                if (msg.fromMe) {
+                    await this.saveMessage(msg);
+                }
+            });
+
+            this.client.on('auth_failure', (msg) => {
+                console.error(`[${this.userId}] Auth failure:`, msg);
+                this.status = 'auth_failure';
+            });
+
+            this.client.on('disconnected', (reason) => {
+                console.log(`[${this.userId}] Disconnected:`, reason);
+                this.status = 'disconnected';
+            });
+
             await this.client.initialize();
-
         } catch (error) {
-            console.error(`[${this.userId}] Error during initialization:`, error);
+            console.error(`[${this.userId}] Initialization failed:`, error);
             this.status = 'error';
         }
     }
 
-    bindEvents() {
-        this.client.on('qr', (qr) => {
-            if (this.status === 'authenticated' || this.status === 'ready') return;
-
-            console.log(`[${this.userId}] QR code received`);
-            qrcode.toDataURL(qr).then(qrImage => {
-                this.qrCode = qrImage;
-                this.status = 'qr_ready';
-                console.log(`[${this.userId}] QR code ready! Status: ${this.status}`);
-            }).catch(err => {
-                console.error(`[${this.userId}] Error generating QR code:`, err);
-                this.status = 'error';
-            });
+    initDb() {
+        this.db.serialize(() => {
+            this.db.run(`CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                chatId TEXT,
+                body TEXT,
+                sender TEXT,
+                receiver TEXT,
+                timestamp INTEGER,
+                fromMe INTEGER,
+                type TEXT,
+                hasMedia INTEGER,
+                fileName TEXT
+            )`);
+            this.db.run(`CREATE TABLE IF NOT EXISTS chats (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                unreadCount INTEGER,
+                timestamp INTEGER,
+                isGroup INTEGER,
+                lastMsgBody TEXT
+            )`);
         });
+    }
 
-        this.client.on('ready', () => {
-            console.log(`[${this.userId}] Client is ready!`);
-            this.status = 'ready';
-            this.qrCode = null;
+    async saveMessage(msg) {
+        return new Promise((resolve) => {
+            this.db.run(`INSERT OR REPLACE INTO messages (id, chatId, body, sender, receiver, timestamp, fromMe, type, hasMedia, fileName) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [msg.id._serialized, msg.from, msg.body, msg.from, msg.to, msg.timestamp, msg.fromMe ? 1 : 0, msg.type, msg.hasMedia ? 1 : 0, msg.fileName || null],
+                (err) => {
+                    if (err) console.error(`[DB Error]`, err);
+                    resolve();
+                }
+            );
         });
+    }
 
-        this.client.on('authenticated', () => {
-            console.log(`[${this.userId}] Authenticated successfully! Syncing...`);
-            this.status = 'authenticated';
-            this.qrCode = null;
-        });
-
-        this.client.on('auth_failure', (msg) => {
-            console.error(`[${this.userId}] Auth failure:`, msg);
-            this.status = 'auth_failure';
-            // Clean up could happen here, or let the user trigger re-init
-        });
-
-        this.client.on('disconnected', (reason) => {
-            console.log(`[${this.userId}] Client was disconnected:`, reason);
-            this.status = 'disconnected';
-            // Optional: destroy client to free resources
-            this.client.destroy().catch(e => console.error("Error destroying client:", e));
-            this.client = null;
-        });
+    async syncHistory() {
+        console.log(`[${this.userId}] Background sync started...`);
+        try {
+            const chats = await this.client.getChats();
+            for (const chat of chats) {
+                this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody)
+                    VALUES (?, ?, ?, ?, ?, ?)`,
+                    [chat.id._serialized, chat.name, chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '']);
+            }
+        } catch (e) {
+            console.warn(`[Sync Error]`, e);
+        }
     }
 
     async sendMessage(to, message, mediaData = null) {
@@ -106,55 +170,69 @@ class WhatsAppSession {
             throw new Error('Session not ready');
         }
 
-        // Format phone number
         let chatId = to;
         if (!chatId.includes('@')) {
             chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
         }
 
-        if (mediaData) {
-            const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
-            return await this.client.sendMessage(chatId, media, { caption: message });
-        }
+        try {
+            let sentMsg;
+            if (mediaData) {
+                const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
+                sentMsg = await this.client.sendMessage(chatId, media, { caption: message });
+            } else {
+                console.log(`[${this.userId}] Sending message to ${chatId}`);
+                sentMsg = await this.client.sendMessage(chatId, message);
+            }
 
-        console.log(`[${this.userId}] Sending message to ${chatId}`);
-        return await this.client.sendMessage(chatId, message);
+            // If the message was sent, save it to our local DB
+            if (sentMsg) await this.saveMessage(sentMsg);
+            return sentMsg;
+        } catch (e) {
+            console.error(`[${this.userId}] sendMessage error catch:`, e.message);
+            // Some "markedUnread" errors are non-fatal internal puppeteer errors, 
+            // the message might actually have been sent.
+            if (e.message.includes('markedUnread')) {
+                console.warn(`[${this.userId}] Ignored internal library error 'markedUnread'`);
+                return { status: 'maybe_sent', warning: e.message };
+            }
+            throw e;
+        }
     }
 
     async getChats() {
-        if (!this.client || this.status !== 'ready') return [];
-        const chats = await this.client.getChats();
-        return chats.map(chat => ({
-            id: chat.id._serialized,
-            name: chat.name,
-            unreadCount: chat.unreadCount,
-            lastMessage: chat.lastMessage ? {
-                body: chat.lastMessage.body,
-                timestamp: chat.lastMessage.timestamp,
-                fromMe: chat.lastMessage.fromMe,
-                type: chat.lastMessage.type
-            } : null,
-            isGroup: chat.isGroup,
-            timestamp: chat.timestamp,
-            hasAvatar: !!chat.id._serialized // We'll fetch on demand to save memory
-        }));
+        return new Promise((resolve) => {
+            this.db.all(`SELECT * FROM chats ORDER BY timestamp DESC`, (err, rows) => {
+                if (err) return resolve([]);
+                resolve(rows.map(r => ({
+                    id: r.id,
+                    name: r.name,
+                    unreadCount: r.unreadCount,
+                    timestamp: r.timestamp,
+                    isGroup: !!r.isGroup,
+                    lastMessage: { body: r.lastMsgBody }
+                })));
+            });
+        });
     }
 
     async getMessages(chatId, limit = 50) {
-        if (!this.client || this.status !== 'ready') return [];
-        const chat = await this.client.getChatById(chatId);
-        const messages = await chat.fetchMessages({ limit });
-        return messages.map(m => ({
-            id: m.id._serialized,
-            body: m.body,
-            from: m.from,
-            to: m.to,
-            timestamp: m.timestamp,
-            fromMe: m.fromMe,
-            type: m.type,
-            hasMedia: m.hasMedia,
-            fileName: m.fileName || null
-        }));
+        return new Promise((resolve) => {
+            this.db.all(`SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp DESC LIMIT ?`, [chatId, limit], (err, rows) => {
+                if (err) return resolve([]);
+                resolve(rows.reverse().map(m => ({
+                    id: m.id,
+                    body: m.body,
+                    from: m.sender,
+                    to: m.receiver,
+                    timestamp: m.timestamp,
+                    fromMe: !!m.fromMe,
+                    type: m.type,
+                    hasMedia: !!m.hasMedia,
+                    fileName: m.fileName
+                })));
+            });
+        });
     }
 
     async getMedia(messageId) {
@@ -363,7 +441,7 @@ async function resumeSessions() {
     }
 }
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`WhatsApp Gateway running on port ${port} (using whatsapp-web.js)`);
+server.listen(port, '0.0.0.0', () => {
+    console.log(`WhatsApp Gateway running on port ${port} (Real-time with SQLite)`);
     resumeSessions();
 });
