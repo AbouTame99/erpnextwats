@@ -12,12 +12,12 @@ app_license = "mit"
 
 # Each item in the list will be shown as an app in the apps page
 add_to_apps_screen = [
-	{
-		"name": "erpnextwats",
-		"logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/1022px-WhatsApp.svg.png",
-		"title": "Erpnextwats",
-		"route": "/whatsapp-chat"
-	}
+    {
+        "name": "erpnextwats",
+        "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/1022px-WhatsApp.svg.png",
+        "title": "WhatsApp Setup",
+        "route": "/whatsapp-chat"
+    }
 ]
 
 # Includes in <head>
@@ -42,7 +42,9 @@ add_to_apps_screen = [
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+    "Sales Invoice" : "public/js/whatsapp_integration.js"
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}

@@ -208,36 +208,7 @@ class WhatsAppSession {
     }
 
     async syncHistory() {
-        console.log(`[${this.userId}] Background sync started...`);
-        try {
-            const chats = await this.client.getChats();
-            for (const chat of chats) {
-                // Native WhatsApp 'locked' property
-                const isNativeLocked = !!chat.locked;
-
-                // Save chat info
-                this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody, archived)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [chat.id._serialized, chat.name || '', chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '', chat.archived ? 1 : 0]);
-
-                if (isNativeLocked) {
-                    // Force the lock state if it was locked on phone but not yet in our DB
-                    this.db.run(`UPDATE chats SET lockedPassword = COALESCE(lockedPassword, 'locked') WHERE id = ?`, [chat.id._serialized]);
-                }
-
-                // Fetch and save last 20 messages for cada chat
-                try {
-                    const messages = await chat.fetchMessages({ limit: 20 });
-                    for (const m of messages) {
-                        await this.saveMessage(m);
-                    }
-                } catch (e) {
-                    console.warn(`[Sync Msg Error] for ${chat.name}:`, e.message);
-                }
-            }
-        } catch (e) {
-            console.warn(`[Sync Error]`, e);
-        }
+        console.log(`[${this.userId}] Background mode active (Syncing skipped)`);
     }
 
     async sendMessage(to, message, mediaData = null) {
