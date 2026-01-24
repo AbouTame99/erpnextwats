@@ -389,7 +389,7 @@ erpnextwats.WhatsAppChat = class {
 
             const html = `
                 <div class="chat-item ${isActive}" data-id="${chat.id}" data-name="${chat.name}">
-                    <div class="chat-item-avatar"><i class="fa fa-${chat.isGroup ? 'users' : 'user'}"></i></div>
+                    <div class="chat-item-avatar" id="avatar-${chat.id.replace(/[^a-zA-Z0-9]/g, '-')}"><i class="fa fa-${chat.isGroup ? 'users' : 'user'}"></i></div>
                     <div class="chat-item-content">
                         <div class="chat-item-top">
                             <span class="chat-item-name">${chat.name || chat.id.split('@')[0]}</span>
@@ -404,6 +404,9 @@ erpnextwats.WhatsAppChat = class {
             `;
             const $item = $(html).appendTo($list);
             $item.on('click', () => this.open_chat(chat.id, chat.name));
+
+            // Fetch avatar asynchronously
+            this.fetch_avatar(chat.id, $item.find('.chat-item-avatar'));
         });
     }
 
