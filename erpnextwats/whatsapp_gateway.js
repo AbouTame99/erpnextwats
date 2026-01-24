@@ -55,6 +55,8 @@ class WhatsAppSession {
 
     bindEvents() {
         this.client.on('qr', (qr) => {
+            if (this.status === 'authenticated' || this.status === 'ready') return;
+
             console.log(`[${this.userId}] QR code received`);
             qrcode.toDataURL(qr).then(qrImage => {
                 this.qrCode = qrImage;
@@ -73,8 +75,8 @@ class WhatsAppSession {
         });
 
         this.client.on('authenticated', () => {
-            console.log(`[${this.userId}] Authenticated successfully!`);
-            this.status = 'connecting';
+            console.log(`[${this.userId}] Authenticated successfully! Syncing...`);
+            this.status = 'authenticated';
             this.qrCode = null;
         });
 

@@ -160,9 +160,9 @@ erpnextwats.WhatsAppChat = class {
                         clearInterval(this.poll_interval);
                         this.show_state('connected');
                         frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
-                    } else if (data.status === 'initializing' || data.status === 'connecting') {
+                    } else if (data.status === 'initializing' || data.status === 'connecting' || data.status === 'authenticated') {
                         // Just wait
-                        if (data.status === 'connecting') {
+                        if (data.status === 'authenticated' || data.status === 'connecting') {
                             this.$container.find('.status-text').text('Authenticated! Syncing your chats...');
                             this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
                         } else {
