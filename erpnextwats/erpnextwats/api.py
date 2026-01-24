@@ -22,9 +22,9 @@ def proxy_to_service(method, path, data=None):
         frappe.logger().info(f"[WhatsApp API] Requesting: {service_url}")
         
         if method.upper() == "GET":
-            response = requests.get(service_url, timeout=10)
+            response = requests.get(service_url, timeout=60)
         else:
-            response = requests.post(service_url, json=data, timeout=10)
+            response = requests.post(service_url, json=data, timeout=60)
         
         frappe.logger().info(f"[WhatsApp API] Response status: {response.status_code}")
             

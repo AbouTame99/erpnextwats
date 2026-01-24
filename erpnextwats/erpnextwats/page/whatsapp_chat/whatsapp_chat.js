@@ -227,8 +227,23 @@ erpnextwats.WhatsAppChat = class {
         this.$container.find('#btn-attach').on('click', () => {
             this.$container.find('#attachment-input').click();
         });
-        this.$container.find('#attachment-input').on('change', (e) => {
-            this.handle_attachment(e);
+        // Search events
+        this.$container.find('.sidebar-search input').on('input', (e) => {
+            const query = $(e.target).val().toLowerCase();
+            this.filter_chats(query);
+        });
+    }
+
+    filter_chats(query) {
+        this.$container.find('.chat-item').each((i, el) => {
+            const $item = $(el);
+            const name = ($item.data('name') || '').toLowerCase();
+            const id = ($item.data('id') || '').toLowerCase();
+            if (name.includes(query) || id.includes(query)) {
+                $item.show();
+            } else {
+                $item.hide();
+            }
         });
     }
 
@@ -367,6 +382,16 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 const chats = r.message || [];
+                if (!Array.isArray(chats)) return;
+
+                // Simple fingerprint to avoid redundant re-renders
+                const current_fingerprint = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}`).join('|');
+                if (this.last_chats_fingerprint === current_fingerprint) {
+                    console.log('[Frontend] Chats unchanged, skipping re-render');
+                    return;
+                }
+
+                this.last_chats_fingerprint = current_fingerprint;
                 this.render_chat_list(chats);
             }
         });
@@ -378,11 +403,13 @@ erpnextwats.WhatsAppChat = class {
     }
 
     render_chat_list(chats) {
+        if (!Array.isArray(chats)) return;
+
         const $list = this.$container.find('#chat-list');
         const activeId = this.current_chat_id;
         $list.empty();
 
-        chats.sort((a, b) => b.timestamp - a.timestamp).forEach(chat => {
+        chats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(chat => {
             const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
             const lastMsg = chat.lastMessage ? chat.lastMessage.body : 'No messages';
             const isActive = activeId === chat.id ? 'active' : '';
@@ -405,7 +432,7 @@ erpnextwats.WhatsAppChat = class {
             const $item = $(html).appendTo($list);
             $item.on('click', () => this.open_chat(chat.id, chat.name));
 
-            // Fetch avatar asynchronously
+            // Fetch avatar asynchronously with caching
             this.fetch_avatar(chat.id, $item.find('.chat-item-avatar'));
         });
     }
@@ -426,6 +453,16 @@ erpnextwats.WhatsAppChat = class {
     }
 
     async fetch_avatar(contactId, $el) {
+        if (!this.avatar_cache) this.avatar_cache = {};
+
+        if (this.avatar_cache[contactId]) {
+            if (this.avatar_cache[contactId] !== 'loading') {
+                $el.html(`<img src="${this.avatar_cache[contactId]}" style="width: 100%; height: 100%; border-radius: 50%;">`);
+            }
+            return;
+        }
+
+        this.avatar_cache[contactId] = 'loading';
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
@@ -434,7 +471,10 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 if (r.message && r.message.url) {
+                    this.avatar_cache[contactId] = r.message.url;
                     $el.html(`<img src="${r.message.url}" style="width: 100%; height: 100%; border-radius: 50%;">`);
+                } else {
+                    this.avatar_cache[contactId] = 'none'; // Mark as not having one to avoid retries
                 }
             }
         });
@@ -451,6 +491,13 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 const messages = r.message || [];
+                if (!Array.isArray(messages)) return;
+
+                // Message fingerprint to avoid redundant renders
+                const current_fingerprint = messages.map(m => m.id).join('|');
+                if (this.last_msg_fingerprint === current_fingerprint) return;
+
+                this.last_msg_fingerprint = current_fingerprint;
                 this.render_messages(messages);
             }
         });
@@ -507,7 +554,7 @@ erpnextwats.WhatsAppChat = class {
 
 
         return `
-            <div class="media-container" style="min-width: 200px; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 4px; margin-bottom: 5px; cursor: pointer;">
+            <div class="media-container" data-msg-id="${msg.id}" style="min-width: 200px; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 4px; margin-bottom: 5px; cursor: pointer;">
                 <div class="media-loader">
                     <i class="fa ${icon}" style="font-size: 30px; color: #8696a0;"></i>
                     <div class="spinner-border spinner-border-sm text-secondary ml-2" role="status"></div>
@@ -518,6 +565,16 @@ erpnextwats.WhatsAppChat = class {
     }
 
     load_media(msg, $container) {
+        if (!this.media_cache) this.media_cache = {};
+
+        if (this.media_cache[msg.id]) {
+            if (this.media_cache[msg.id] !== 'loading') {
+                this.render_media_content(msg, this.media_cache[msg.id], $container);
+            }
+            return;
+        }
+
+        this.media_cache[msg.id] = 'loading';
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: {
@@ -526,41 +583,56 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 if (r.message && r.message.data) {
-                    const data = `data:${r.message.mimetype};base64,${r.message.data}`;
-                    if (msg.type === 'image') {
-                        $container.html(`<img src="${data}" style="max-width: 100%; border-radius: 4px;">`);
-                    } else if (msg.type === 'video') {
-                        $container.html(`<video src="${data}" controls style="max-width: 100%; border-radius: 4px;"></video>`);
-                    } else if (msg.type === 'audio' || msg.type === 'ptt') {
-                        $container.html(`<audio src="${data}" controls style="max-width: 100%;"></audio>`);
-                    } else if (msg.type === 'document' || msg.type === 'ppt') {
-                        let fileIcon = 'fa-file-o';
-                        if (r.message.mimetype.includes('pdf')) fileIcon = 'fa-file-pdf-o';
-                        if (r.message.mimetype.includes('word')) fileIcon = 'fa-file-word-o';
-                        if (r.message.mimetype.includes('excel')) fileIcon = 'fa-file-excel-o';
-                        if (r.message.mimetype.includes('powerpoint')) fileIcon = 'fa-file-powerpoint-o';
-
-                        $container.html(`
-                            <div class="doc-msg" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(0,0,0,0.03); width: 100%;">
-                                <i class="fa ${fileIcon}" style="font-size: 24px; color: #8696a0;"></i>
-                                <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                    ${msg.fileName || 'Document'}
-                                </div>
-                                <a href="${data}" download="${msg.fileName || 'file'}" class="btn btn-xs btn-outline-secondary">
-                                    <i class="fa fa-download"></i>
-                                </a>
-                            </div>
-                        `);
-                    }
-                    $container.css('background', 'transparent');
+                    const data = {
+                        data: `data:${r.message.mimetype};base64,${r.message.data}`,
+                        mimetype: r.message.mimetype
+                    };
+                    this.media_cache[msg.id] = data;
+                    this.render_media_content(msg, data, $container);
+                } else {
+                    this.media_cache[msg.id] = 'error';
+                    $container.html('<i class="fa fa-exclamation-triangle"></i> Failed to load media');
                 }
             }
         });
     }
 
+    render_media_content(msg, media, $container) {
+        const data = media.data;
+        if (msg.type === 'image') {
+            $container.html(`<img src="${data}" style="max-width: 100%; border-radius: 4px;">`);
+        } else if (msg.type === 'video') {
+            $container.html(`<video src="${data}" controls style="max-width: 100%; border-radius: 4px;"></video>`);
+        } else if (msg.type === 'audio' || msg.type === 'ptt') {
+            $container.html(`<audio src="${data}" controls style="max-width: 100%;"></audio>`);
+        } else if (msg.type === 'document' || msg.type === 'ppt') {
+            let fileIcon = 'fa-file-o';
+            if (media.mimetype.includes('pdf')) fileIcon = 'fa-file-pdf-o';
+            if (media.mimetype.includes('word')) fileIcon = 'fa-file-word-o';
+            if (media.mimetype.includes('excel')) fileIcon = 'fa-file-excel-o';
+            if (media.mimetype.includes('powerpoint')) fileIcon = 'fa-file-powerpoint-o';
+
+            $container.html(`
+                <div class="doc-msg" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(0,0,0,0.03); width: 100%;">
+                    <i class="fa ${fileIcon}" style="font-size: 24px; color: #8696a0;"></i>
+                    <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${msg.fileName || 'Document'}
+                    </div>
+                    <a href="${data}" download="${msg.fileName || 'file'}" class="btn btn-xs btn-outline-secondary">
+                        <i class="fa fa-download"></i>
+                    </a>
+                </div>
+            `);
+        }
+        $container.css('background', 'transparent');
+    }
+
     async handle_attachment(e) {
         const file = e.target.files[0];
         if (!file) return;
+
+        const $input = this.$container.find('#msg-input');
+        const text = $input.val();
 
         frappe.show_alert({ message: __('Uploading attachment...'), indicator: 'blue' });
 
@@ -575,7 +647,7 @@ erpnextwats.WhatsAppChat = class {
                 data: {
                     userId: frappe.session.user,
                     to: this.current_chat_id,
-                    message: '',
+                    message: text,
                     media: {
                         mimetype: file.type,
                         data: data,
@@ -584,6 +656,7 @@ erpnextwats.WhatsAppChat = class {
                 }
             },
             callback: (r) => {
+                $input.val('');
                 this.fetch_messages(this.current_chat_id);
                 frappe.show_alert({ message: __('File sent!'), indicator: 'green' });
             }
