@@ -12,9 +12,15 @@ app.use(express.json());
 // Global state to track sessions
 const sessions = {};
 
+// Helper to sanitize userId for safe usage in IDs and paths
+function getSafeId(userId) {
+    if (!userId) return null;
+    return userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 class WhatsAppSession {
     constructor(userId) {
-        this.userId = userId;
+        this.userId = userId; // Original email for logging
         this.status = 'init';
         this.qrCode = null;
         this.client = null;
@@ -27,7 +33,7 @@ class WhatsAppSession {
 
         try {
             // Sanitize userId for clientId (only alphanumeric, _, - allowed)
-            const safeClientId = this.userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeClientId = getSafeId(this.userId);
 
             // Create client with LocalAuth
             this.client = new Client({
@@ -183,8 +189,9 @@ class WhatsAppSession {
 
 // Initialize session
 app.post('/api/whatsapp/init', async (req, res) => {
-    const userId = req.body.userId;
-    console.log(`[API] POST /api/whatsapp/init - userId: ${userId}`);
+    const rawUserId = req.body.userId;
+    const userId = getSafeId(rawUserId);
+    console.log(`[API] POST /api/whatsapp/init - userId: ${rawUserId} (safe: ${userId})`);
 
     if (!userId) {
         return res.status(400).json({ error: 'userId is required' });
@@ -223,9 +230,19 @@ app.post('/api/whatsapp/init', async (req, res) => {
 
 // Get session status
 app.get('/api/whatsapp/status/:userId', (req, res) => {
-    const userId = req.params.userId;
+    const rawUserId = req.params.userId;
+    const userId = getSafeId(rawUserId);
 
     if (!sessions[userId]) {
+        // Self-healing: check if file exists on disk
+        const authDir = path.join(__dirname, 'wwebjs_auth', `session-${userId}`);
+        if (fs.existsSync(authDir)) {
+            console.log(`[API] Session ${userId} found on disk but not in memory. Auto-initializing...`);
+            const session = new WhatsAppSession(rawUserId); // Use raw email for logging
+            sessions[userId] = session;
+            session.initialize().catch(err => console.error(`[API] Auto-init failed:`, err));
+            return res.json({ status: 'initializing' });
+        }
         return res.json({ status: 'disconnected' });
     }
 
@@ -238,7 +255,7 @@ app.get('/api/whatsapp/status/:userId', (req, res) => {
 
 // Get all chats
 app.get('/api/whatsapp/chats/:userId', async (req, res) => {
-    const userId = req.params.userId;
+    const userId = getSafeId(req.params.userId);
     if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
 
     try {
@@ -251,7 +268,8 @@ app.get('/api/whatsapp/chats/:userId', async (req, res) => {
 
 // Get messages for a chat
 app.get('/api/whatsapp/messages/:userId/:chatId', async (req, res) => {
-    const { userId, chatId } = req.params;
+    const userId = getSafeId(req.params.userId);
+    const { chatId } = req.params;
     if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
 
     try {
@@ -262,16 +280,35 @@ app.get('/api/whatsapp/messages/:userId/:chatId', async (req, res) => {
     }
 });
 
-// Send message
+// Get media for a message
+app.get('/api/whatsapp/media/:userId/:messageId', async (req, res) => {
+    const userId = getSafeId(req.params.userId);
+    const { messageId } = req.params;
+    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        const media = await sessions[userId].getMedia(messageId);
+        if (media) {
+            res.json(media);
+        } else {
+            res.status(404).json({ error: 'Media not found or message has no media' });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Send message (updated for media)
 app.post('/api/whatsapp/send', async (req, res) => {
-    const { userId, to, message } = req.body;
+    const { to, message, media } = req.body;
+    const userId = getSafeId(req.body.userId);
 
     if (!sessions[userId] || sessions[userId].status !== 'ready') {
         return res.status(400).json({ error: 'Session not ready' });
     }
 
     try {
-        await sessions[userId].sendMessage(to, message);
+        await sessions[userId].sendMessage(to, message, media);
         res.json({ status: 'success' });
     } catch (error) {
         console.error(`[API] Failed to send message:`, error);
@@ -281,7 +318,7 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
 // Disconnect session
 app.post('/api/whatsapp/disconnect', async (req, res) => {
-    const userId = req.body.userId;
+    const userId = getSafeId(req.body.userId);
 
     if (sessions[userId]) {
         await sessions[userId].disconnect();
@@ -292,8 +329,41 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
     }
 });
 
+// Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Function to resume sessions from disk on startup
+async function resumeSessions() {
+    const authDir = path.join(__dirname, 'wwebjs_auth');
+    if (!fs.existsSync(authDir)) return;
+
+    const dirs = fs.readdirSync(authDir);
+    console.log(`[BOOT] Found ${dirs.length} potential session(s) on disk.`);
+
+    for (const dir of dirs) {
+        if (dir.startsWith('session-')) {
+            const safeId = dir.replace('session-', '');
+            // We need the original userId to map back, but since we sanitized it,
+            // we'll assume the safeId is what the frontend will use for mapping
+            // or we'll allow the status check to "claim" the session by its original ID.
+
+            // For now, let's just initialize it so the client stays alive.
+            // When the user opens their dashboard, the frontend sends the original email.
+            // We'll update the status check to match sanitized IDs.
+            console.log(`[BOOT] Resuming session for sanitized ID: ${safeId}`);
+
+            // Note: We don't have the original 'userId' (email) here, only the sanitized one.
+            // But WhatsAppSession uses userId for logging and clientId for auth.
+            // Let's create a "System" session for now, it will be replaced/mapped correctly 
+            // once the user performs a status check or init call with their email.
+            const session = new WhatsAppSession(safeId);
+            sessions[safeId] = session;
+            session.initialize().catch(err => console.error(`[BOOT] Failed to resume ${safeId}:`, err));
+        }
+    }
+}
 
 app.listen(port, '0.0.0.0', () => {
     console.log(`WhatsApp Gateway running on port ${port} (using whatsapp-web.js)`);
+    resumeSessions();
 });
