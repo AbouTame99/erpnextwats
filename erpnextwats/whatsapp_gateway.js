@@ -95,7 +95,7 @@ class WhatsAppSession {
         });
     }
 
-    async sendMessage(to, message) {
+    async sendMessage(to, message, mediaData = null) {
         if (!this.client || this.status !== 'ready') {
             throw new Error('Session not ready');
         }
@@ -104,6 +104,11 @@ class WhatsAppSession {
         let chatId = to;
         if (!chatId.includes('@')) {
             chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
+        }
+
+        if (mediaData) {
+            const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
+            return await this.client.sendMessage(chatId, media, { caption: message });
         }
 
         console.log(`[${this.userId}] Sending message to ${chatId}`);
@@ -120,10 +125,12 @@ class WhatsAppSession {
             lastMessage: chat.lastMessage ? {
                 body: chat.lastMessage.body,
                 timestamp: chat.lastMessage.timestamp,
-                fromMe: chat.lastMessage.fromMe
+                fromMe: chat.lastMessage.fromMe,
+                type: chat.lastMessage.type
             } : null,
             isGroup: chat.isGroup,
-            timestamp: chat.timestamp
+            timestamp: chat.timestamp,
+            hasAvatar: !!chat.id._serialized // We'll fetch on demand to save memory
         }));
     }
 
@@ -139,8 +146,29 @@ class WhatsAppSession {
             timestamp: m.timestamp,
             fromMe: m.fromMe,
             type: m.type,
-            hasMedia: m.hasMedia
+            hasMedia: m.hasMedia,
+            fileName: m.fileName || null
         }));
+    }
+
+    async getMedia(messageId) {
+        if (!this.client || this.status !== 'ready') return null;
+        const msg = await this.client.getMessageById(messageId);
+        if (msg && msg.hasMedia) {
+            const media = await msg.downloadMedia();
+            return media; // returns {mimetype, data, filename}
+        }
+        return null;
+    }
+
+    async getProfilePic(contactId) {
+        if (!this.client || this.status !== 'ready') return null;
+        try {
+            const url = await this.client.getProfilePicUrl(contactId);
+            return url;
+        } catch (e) {
+            return null;
+        }
     }
 
     async disconnect() {

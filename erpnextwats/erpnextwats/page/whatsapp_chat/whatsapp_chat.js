@@ -100,7 +100,8 @@ erpnextwats.WhatsAppChat = class {
                                 </div>
                                 <div class="chat-input-area">
                                     <i class="fa fa-smile-o"></i>
-                                    <i class="fa fa-paperclip"></i>
+                                    <input type="file" id="attachment-input" style="display: none;">
+                                    <i class="fa fa-paperclip" id="btn-attach"></i>
                                     <div class="input-wrapper">
                                         <input type="text" id="msg-input" placeholder="Type a message">
                                     </div>
@@ -221,6 +222,14 @@ erpnextwats.WhatsAppChat = class {
             }
         });
         this.$container.find('#btn-send').on('click', () => this.send_selected_message());
+
+        // Attachment events
+        this.$container.find('#btn-attach').on('click', () => {
+            this.$container.find('#attachment-input').click();
+        });
+        this.$container.find('#attachment-input').on('change', (e) => {
+            this.handle_attachment(e);
+        });
     }
 
     async check_status() {
@@ -323,7 +332,7 @@ erpnextwats.WhatsAppChat = class {
 
             if (timeLeft <= 0) {
                 clearInterval(this.timer_interval);
-                $timer.text('Refresing...');
+                $timer.text('Refreshing...');
             }
         }, 1000);
     }
@@ -407,7 +416,25 @@ erpnextwats.WhatsAppChat = class {
         this.$container.find('.active-chat').show();
         this.$container.find('.chat-target-name').text(chatName);
 
+        // Fetch avatar for active chat
+        this.fetch_avatar(chatId, this.$container.find('.chat-header .chat-avatar'));
+
         this.fetch_messages(chatId);
+    }
+
+    async fetch_avatar(contactId, $el) {
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
+                method: 'GET',
+                path: `api/whatsapp/profile-pic/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(contactId)}`
+            },
+            callback: (r) => {
+                if (r.message && r.message.url) {
+                    $el.html(`<img src="${r.message.url}" style="width: 100%; height: 100%; border-radius: 50%;">`);
+                }
+            }
+        });
     }
 
     async fetch_messages(chatId) {
@@ -443,21 +470,130 @@ erpnextwats.WhatsAppChat = class {
             const time = new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const dirClass = msg.fromMe ? 'msg-out' : 'msg-in';
 
+            let content = `<div class="msg-body">${msg.body}</div>`;
+            if (msg.hasMedia) {
+                content = this.get_media_placeholder(msg);
+            }
+
             const html = `
-                <div class="message-bubble ${dirClass}">
-                    <div class="msg-body">${msg.body}</div>
+                <div class="message-bubble ${dirClass}" data-msg-id="${msg.id}">
+                    ${content}
                     <div class="msg-meta">
                         <span class="msg-time">${time}</span>
                         ${msg.fromMe ? '<i class="fa fa-check"></i>' : ''}
                     </div>
                 </div>
             `;
-            $thread.append(html);
+            const $msg = $(html).appendTo($thread);
+            if (msg.hasMedia) {
+                this.load_media(msg, $msg.find('.media-container'));
+            }
         });
 
         if (isAtBottom) {
             $thread.scrollTop($thread[0].scrollHeight);
         }
+    }
+
+    get_media_placeholder(msg) {
+        let icon = 'fa-file-o';
+        if (msg.type === 'image') icon = 'fa-picture-o';
+        if (msg.type === 'video') icon = 'fa-video-camera';
+        if (msg.type === 'audio' || msg.type === 'ptt') icon = 'fa-microphone';
+        if (msg.type === 'document' || msg.type === 'ppt') icon = 'fa-file-text-o';
+
+
+        return `
+            <div class="media-container" style="min-width: 200px; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 4px; margin-bottom: 5px; cursor: pointer;">
+                <div class="media-loader">
+                    <i class="fa ${icon}" style="font-size: 30px; color: #8696a0;"></i>
+                    <div class="spinner-border spinner-border-sm text-secondary ml-2" role="status"></div>
+                </div>
+            </div>
+            ${msg.body ? `<div class="msg-body">${msg.body}</div>` : ''}
+        `;
+    }
+
+    load_media(msg, $container) {
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
+                method: 'GET',
+                path: `api/whatsapp/media/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(msg.id)}`
+            },
+            callback: (r) => {
+                if (r.message && r.message.data) {
+                    const data = `data:${r.message.mimetype};base64,${r.message.data}`;
+                    if (msg.type === 'image') {
+                        $container.html(`<img src="${data}" style="max-width: 100%; border-radius: 4px;">`);
+                    } else if (msg.type === 'video') {
+                        $container.html(`<video src="${data}" controls style="max-width: 100%; border-radius: 4px;"></video>`);
+                    } else if (msg.type === 'audio' || msg.type === 'ptt') {
+                        $container.html(`<audio src="${data}" controls style="max-width: 100%;"></audio>`);
+                    } else if (msg.type === 'document' || msg.type === 'ppt') {
+                        let fileIcon = 'fa-file-o';
+                        if (r.message.mimetype.includes('pdf')) fileIcon = 'fa-file-pdf-o';
+                        if (r.message.mimetype.includes('word')) fileIcon = 'fa-file-word-o';
+                        if (r.message.mimetype.includes('excel')) fileIcon = 'fa-file-excel-o';
+                        if (r.message.mimetype.includes('powerpoint')) fileIcon = 'fa-file-powerpoint-o';
+
+                        $container.html(`
+                            <div class="doc-msg" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(0,0,0,0.03); width: 100%;">
+                                <i class="fa ${fileIcon}" style="font-size: 24px; color: #8696a0;"></i>
+                                <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    ${msg.fileName || 'Document'}
+                                </div>
+                                <a href="${data}" download="${msg.fileName || 'file'}" class="btn btn-xs btn-outline-secondary">
+                                    <i class="fa fa-download"></i>
+                                </a>
+                            </div>
+                        `);
+                    }
+                    $container.css('background', 'transparent');
+                }
+            }
+        });
+    }
+
+    async handle_attachment(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        frappe.show_alert({ message: __('Uploading attachment...'), indicator: 'blue' });
+
+        const base64 = await this.file_to_base64(file);
+        const data = base64.split(',')[1];
+
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: {
+                method: 'POST',
+                path: 'api/whatsapp/send',
+                data: {
+                    userId: frappe.session.user,
+                    to: this.current_chat_id,
+                    message: '',
+                    media: {
+                        mimetype: file.type,
+                        data: data,
+                        filename: file.name
+                    }
+                }
+            },
+            callback: (r) => {
+                this.fetch_messages(this.current_chat_id);
+                frappe.show_alert({ message: __('File sent!'), indicator: 'green' });
+            }
+        });
+    }
+
+    file_to_base64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+        });
     }
 
     async send_selected_message() {
