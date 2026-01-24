@@ -23,7 +23,20 @@ fi
 echo "Checking/Installing Chrome for Puppeteer..."
 npx puppeteer browsers install chrome
 
-# Start the gateway
+# Auto-detect Chrome path and set environment variable
+CHROME_PATH=$(find /root/.cache/puppeteer -name chrome -type f -executable | head -n 1)
+if [ -z "$CHROME_PATH" ]; then
+    CHROME_PATH=$(which google-chrome-stable || which google-chrome || which chromium-browser || which chromium)
+fi
+
+if [ -n "$CHROME_PATH" ]; then
+    export PUPPETEER_EXECUTABLE_PATH="$CHROME_PATH"
+    echo "Using Chrome at: $PUPPETEER_EXECUTABLE_PATH"
+else
+    echo "WARNING: Chrome executable not found!"
+fi
+
+# Start the gateway with exported ENVs
 exec /usr/bin/node erpnextwats/whatsapp_gateway.js
 
 
