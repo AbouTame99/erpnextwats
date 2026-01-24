@@ -7,10 +7,20 @@ const puppeteer = require('puppeteer');
 
 // Helper to find Chrome/Chromium executable
 function getBrowserPath() {
-    return process.env.PUPPETEER_EXECUTABLE_PATH ||
-        '/usr/bin/google-chrome-stable' ||
-        '/usr/bin/google-chrome' ||
-        '/usr/bin/chromium-browser';
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
+
+    const paths = [
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium'
+    ];
+
+    for (const p of paths) {
+        if (fs.existsSync(p)) return p;
+    }
+
+    return undefined; // Let puppeteer try default if none found
 }
 const sqlite3 = require('sqlite3').verbose();
 const http = require('http');
@@ -65,16 +75,22 @@ class WhatsAppSession {
             this.db = new sqlite3.Database(this.dbPath);
             this.initDb();
 
+            const browserOptions = {
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            };
+
+            const customPath = getBrowserPath();
+            if (customPath) {
+                browserOptions.executablePath = customPath;
+            }
+
             this.client = new Client({
                 authStrategy: new LocalAuth({
                     clientId: this.safeId,
                     dataPath: this.authDir
                 }),
-                puppeteer: {
-                    headless: true,
-                    executablePath: getBrowserPath(),
-                    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-                }
+                puppeteer: browserOptions
             });
 
             this.client.on('qr', (qr) => {
