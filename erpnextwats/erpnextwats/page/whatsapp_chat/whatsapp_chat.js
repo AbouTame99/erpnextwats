@@ -162,7 +162,12 @@ erpnextwats.WhatsAppChat = class {
                         frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
                     } else if (data.status === 'initializing' || data.status === 'connecting') {
                         // Just wait
-                        this.$container.find('.status-text').text('Connecting...');
+                        if (data.status === 'connecting') {
+                            this.$container.find('.status-text').text('Authenticated! Syncing your chats...');
+                            this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
+                        } else {
+                            this.$container.find('.status-text').text('Connecting...');
+                        }
                     } else if (data.status === 'disconnected' || data.status === 'logged_out') {
                         console.log('[Frontend] Status became disconnected/logged_out during polling.');
                         clearInterval(this.poll_interval);

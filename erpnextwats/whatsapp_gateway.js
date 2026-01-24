@@ -75,6 +75,7 @@ class WhatsAppSession {
         this.client.on('authenticated', () => {
             console.log(`[${this.userId}] Authenticated successfully!`);
             this.status = 'connecting';
+            this.qrCode = null;
         });
 
         this.client.on('auth_failure', (msg) => {
