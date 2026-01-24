@@ -42,6 +42,10 @@ erpnextwats.WhatsAppChat = class {
 							<div class="spinner-border text-primary" role="status"></div>
 						</div>
 						<p class="text-info status-text">Generating QR Code...</p>
+                        <div class="qr-timer-wrapper" style="margin-top: 10px; display: none;">
+                            <span class="text-muted">QR expires in: </span>
+                            <span class="qr-countdown" style="font-weight: bold; color: #d9534f;">60</span>s
+                        </div>
                         <button class="btn btn-sm btn-secondary btn-cancel-qr" style="margin-top: 10px;">Cancel</button>
 					</div>
 					<div class="wats-connected" style="display: none;">
@@ -65,6 +69,7 @@ erpnextwats.WhatsAppChat = class {
         this.$container.find('.btn-disconnect').on('click', () => this.disconnect_session());
         this.$container.find('.btn-cancel-qr').on('click', () => {
             if (this.poll_interval) clearInterval(this.poll_interval);
+            if (this.timer_interval) clearInterval(this.timer_interval);
             this.show_state('init');
         });
     }
@@ -158,11 +163,14 @@ erpnextwats.WhatsAppChat = class {
                         this.$container.find('.status-text').text('Scan now to connect');
                     } else if (data.status === 'ready') {
                         clearInterval(this.poll_interval);
+                        if (this.timer_interval) clearInterval(this.timer_interval);
                         this.show_state('connected');
                         frappe.show_alert({ message: __('WhatsApp Connected!'), indicator: 'green' });
                     } else if (data.status === 'initializing' || data.status === 'connecting' || data.status === 'authenticated') {
                         // Just wait
                         if (data.status === 'authenticated' || data.status === 'connecting') {
+                            if (this.timer_interval) clearInterval(this.timer_interval);
+                            this.$container.find('.qr-timer-wrapper').hide();
                             this.$container.find('.status-text').text('Authenticated! Syncing your chats...');
                             this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
                         } else {
@@ -196,6 +204,34 @@ erpnextwats.WhatsAppChat = class {
         if (this.last_qr === qrData) return;
         this.last_qr = qrData;
         this.$container.find('#qr-image').html(`<img src="${qrData}" style="width: 100%;">`);
+        this.start_qr_timer();
+    }
+
+    start_qr_timer() {
+        if (this.timer_interval) clearInterval(this.timer_interval);
+
+        let timeLeft = 60; // Standard WA QR expiry is around 60s
+        const $timer = this.$container.find('.qr-countdown');
+        const $wrapper = this.$container.find('.qr-timer-wrapper');
+
+        $wrapper.show();
+        $timer.text(timeLeft);
+
+        this.timer_interval = setInterval(() => {
+            timeLeft--;
+            $timer.text(timeLeft);
+
+            if (timeLeft <= 10) {
+                $timer.css('color', '#ff4d4f');
+            } else {
+                $timer.css('color', '#d9534f');
+            }
+
+            if (timeLeft <= 0) {
+                clearInterval(this.timer_interval);
+                $timer.text('Refresing...');
+            }
+        }, 1000);
     }
 
     show_state(state) {
