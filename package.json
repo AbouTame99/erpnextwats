@@ -12,7 +12,7 @@
     "start": "node erpnextwats/whatsapp_gateway.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.21",
+    "@whiskeysockets/baileys": "^6.17.16",
     "@hapi/boom": "^10.0.1",
     "qrcode": "^1.5.3",
     "express": "^4.18.2",
