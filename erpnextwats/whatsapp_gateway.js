@@ -25,10 +25,13 @@ class WhatsAppSession {
         this.status = 'initializing';
 
         try {
+            // Sanitize userId for clientId (only alphanumeric, _, - allowed)
+            const safeClientId = this.userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
             // Create client with LocalAuth
             this.client = new Client({
                 authStrategy: new LocalAuth({
-                    clientId: this.userId,
+                    clientId: safeClientId,
                     dataPath: this.authDir
                 }),
                 puppeteer: {
