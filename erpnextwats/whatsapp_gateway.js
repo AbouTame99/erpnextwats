@@ -172,7 +172,9 @@ class WhatsAppSession {
                 unreadCount INTEGER,
                 timestamp INTEGER,
                 isGroup INTEGER,
-                lastMsgBody TEXT
+                lastMsgBody TEXT,
+                archived INTEGER,
+                lockedPassword TEXT
             )`);
         });
     }
@@ -199,9 +201,9 @@ class WhatsAppSession {
             const chats = await this.client.getChats();
             for (const chat of chats) {
                 // Save chat info
-                this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody)
-                    VALUES (?, ?, ?, ?, ?, ?)`,
-                    [chat.id._serialized, chat.name || '', chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '']);
+                this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody, archived)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [chat.id._serialized, chat.name || '', chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '', chat.archived ? 1 : 0]);
 
                 // Fetch and save last 20 messages for cada chat
                 try {
@@ -282,7 +284,9 @@ class WhatsAppSession {
                     unreadCount: r.unreadCount,
                     timestamp: r.timestamp,
                     isGroup: !!r.isGroup,
-                    lastMessage: { body: r.lastMsgBody }
+                    lastMessage: { body: r.lastMsgBody },
+                    archived: !!r.archived,
+                    lockedPassword: r.lockedPassword
                 })));
             });
         });
@@ -493,6 +497,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Get profile picture
 app.get('/api/whatsapp/profile-pic/:userId/:contactId', async (req, res) => {
+    // ... (existing code handles this)
     const userId = getSafeId(req.params.userId);
     const { contactId } = req.params;
     if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
@@ -500,6 +505,40 @@ app.get('/api/whatsapp/profile-pic/:userId/:contactId', async (req, res) => {
     try {
         const url = await sessions[userId].getProfilePicUrl(contactId);
         res.json({ url });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Toggle Archive
+app.post('/api/whatsapp/archive', async (req, res) => {
+    const { userId, chatId, archive } = req.body;
+    const safeId = getSafeId(userId);
+    if (!sessions[safeId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        const chat = await sessions[safeId].client.getChatById(chatId);
+        if (archive) await chat.archive();
+        else await chat.unarchive();
+
+        // Update local DB
+        sessions[safeId].db.run(`UPDATE chats SET archived = ? WHERE id = ?`, [archive ? 1 : 0, chatId]);
+        res.json({ status: 'success' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Toggle Lock
+app.post('/api/whatsapp/lock', async (req, res) => {
+    const { userId, chatId, password } = req.body;
+    const safeId = getSafeId(userId);
+    if (!sessions[safeId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        // Update local DB only (custom feature)
+        sessions[safeId].db.run(`UPDATE chats SET lockedPassword = ? WHERE id = ?`, [password || null, chatId]);
+        res.json({ status: 'success' });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

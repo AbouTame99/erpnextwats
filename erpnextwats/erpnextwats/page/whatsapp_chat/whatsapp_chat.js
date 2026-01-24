@@ -3,328 +3,211 @@ console.log('[WhatsApp Chat] Script loaded!');
 frappe.provide('erpnextwats');
 
 frappe.pages['whatsapp-chat'].on_page_load = function (wrapper) {
-    console.log('[WhatsApp Chat] Page load event triggered!');
     var page = frappe.ui.make_app_page({
         parent: wrapper,
         title: 'WhatsApp Office Workspace',
         single_column: true
     });
-
-    console.log('[WhatsApp Chat] Creating WhatsAppChat instance...');
     new erpnextwats.WhatsAppChat(page);
 }
 
 erpnextwats.WhatsAppChat = class {
     constructor(page) {
-        console.log('[WhatsApp Chat] Constructor called');
         this.page = page;
-        this.socket = null; // Initialize socket here
-        this.refresh(); // Call refresh to set up layout and check status
+        this.socket = null;
+        this.all_chats_ref = [];
+        this.current_search_query = '';
+        this.archived_expanded = false;
+        this.refresh();
     }
 
     refresh() {
         this.page.clear_primary_action();
         this.page.clear_secondary_action();
 
-        // Inject Socket.io Client
         if (!window.io) {
             frappe.require('https://cdn.socket.io/4.7.2/socket.io.min.js');
         }
 
         this.prepare_layout();
-        console.log('[WhatsApp Chat] Layout prepared, checking status...');
         this.check_status();
     }
 
     prepare_layout() {
-        console.log('[WhatsApp Chat] Preparing layout...');
         try {
             this.id = frappe.session.user;
-            // Use a more reliable sound or a silent fallback
             this.notif_sound = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
             this.notif_sound.load();
 
             this.page.main.html(`
-			<div class="whatsapp-wrapper">
-				<div id="wats-container">
-                    <div class="wats-loading" style="text-align: center; padding: 100px;">
-                        <div class="spinner-border text-primary" role="status"></div>
-                        <p class="text-muted mt-3">Connecting to WhatsApp Gateway...</p>
-                    </div>
-                    <!-- Setup Screen -->
-					<div class="wats-init setup-screen">
-						<i class="fa fa-whatsapp main-icon"></i>
-						<h3>WhatsApp Integration</h3>
-						<p class="text-muted">Connect your personal WhatsApp to use it from your desk.</p>
-						<button class="btn btn-primary btn-lg btn-connect">Start Connection</button>
-					</div>
-
-                    <!-- QR Screen -->
-					<div class="wats-qr setup-screen" style="display: none;">
-						<h4>Scan with your phone</h4>
-						<p class="text-muted">Open WhatsApp > Settings > Linked Devices > Link a Device</p>
-						<div id="qr-image">
-							<div class="spinner-border text-primary" role="status"></div>
-						</div>
-						<p class="text-info status-text">Generating QR Code...</p>
-                        <div class="qr-timer-wrapper" style="display: none;">
-                            <span class="text-muted">QR expires in: </span>
-                            <span class="qr-countdown">60</span>s
+                <div class="whatsapp-wrapper">
+                    <div id="wats-container">
+                        <div class="wats-loading" style="text-align: center; padding: 100px;">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="text-muted mt-3">Connecting to WhatsApp Gateway...</p>
                         </div>
-                        <button class="btn btn-sm btn-secondary btn-cancel-qr">Cancel</button>
-					</div>
-
-                    <!-- Main Chat Interface (Clone) -->
-					<div class="wats-connected chat-app" style="display: none;">
-                        <div class="chat-sidebar">
-                            <div class="sidebar-header">
-                                <div class="user-avatar"><i class="fa fa-user"></i></div>
-                                <div class="header-actions">
-                                    <i class="fa fa-circle-o-notch"></i>
-                                    <i class="fa fa-commenting"></i>
-                                    <i class="fa fa-ellipsis-v"></i>
-                                </div>
-                            </div>
-                            <div class="sidebar-search">
-                                <div class="search-input-wrapper">
-                                    <i class="fa fa-search"></i>
-                                    <input type="text" placeholder="Search or start new chat">
-                                </div>
-                            </div>
-                            <div class="chat-list" id="chat-list">
-                                <!-- Chats rendered here -->
-                            </div>
+                        <div class="wats-init setup-screen" style="display:none;">
+                            <i class="fa fa-whatsapp main-icon"></i>
+                            <h3>WhatsApp Integration</h3>
+                            <button class="btn btn-primary btn-lg btn-connect">Start Connection</button>
                         </div>
-                        <div class="chat-main">
-                            <div class="chat-welcome">
-                                <div class="welcome-content">
-                                    <i class="fa fa-whatsapp"></i>
-                                    <h2>WhatsApp Web Clone</h2>
-                                    <p>Send and receive messages without keeping your phone online.<br>Use WhatsApp on up to 4 linked devices at the same time.</p>
-                                    <div class="footer-note"><i class="fa fa-lock"></i> End-to-end encrypted</div>
+                        <div class="wats-qr setup-screen" style="display: none;">
+                            <h4>Scan with your phone</h4>
+                            <div id="qr-image"><div class="spinner-border text-primary"></div></div>
+                            <button class="btn btn-sm btn-secondary btn-cancel-qr">Cancel</button>
+                        </div>
+                        <div class="wats-connected chat-app" style="display: none;">
+                            <div class="chat-sidebar">
+                                <div class="sidebar-header">
+                                    <div class="user-avatar"><i class="fa fa-user"></i></div>
+                                    <div class="header-actions"><i class="fa fa-ellipsis-v"></i></div>
                                 </div>
+                                <div class="sidebar-search">
+                                    <div class="search-input-wrapper">
+                                        <i class="fa fa-search"></i>
+                                        <input type="text" placeholder="Search or Enter Passcode">
+                                    </div>
+                                </div>
+                                <div class="chat-list" id="chat-list"></div>
                             </div>
-                            
-                            <div class="active-chat" style="display: none;">
-                                <div class="chat-header">
-                                    <div class="chat-info">
-                                        <div class="chat-avatar"><i class="fa fa-users"></i></div>
-                                        <div class="chat-details">
-                                            <h5 class="chat-target-name">Contact Name</h5>
-                                            <p class="chat-target-status">online</p>
+                            <div class="chat-main">
+                                <div class="chat-welcome">
+                                    <div class="welcome-content">
+                                        <i class="fa fa-whatsapp"></i>
+                                        <h2>Ready to Chat</h2>
+                                        <p>Your messages are synced in real-time.</p>
+                                    </div>
+                                </div>
+                                <div class="active-chat" style="display: none;">
+                                    <div class="chat-header">
+                                        <div class="chat-info">
+                                            <div class="chat-avatar"><i class="fa fa-users"></i></div>
+                                            <div class="chat-details"><h5 class="chat-target-name"></h5><p>online</p></div>
                                         </div>
                                     </div>
-                                    <div class="header-actions">
-                                        <i class="fa fa-search"></i>
-                                        <i class="fa fa-ellipsis-v"></i>
+                                    <div class="message-thread" id="message-thread"></div>
+                                    <div class="chat-input-area">
+                                        <input type="file" id="attachment-input" style="display: none;">
+                                        <i class="fa fa-paperclip" id="btn-attach"></i>
+                                        <div class="input-wrapper"><input type="text" id="msg-input" placeholder="Type a message"></div>
+                                        <i class="fa fa-paper-plane" id="btn-send"></i>
                                     </div>
-                                </div>
-                                <div class="message-thread" id="message-thread">
-                                    <!-- Messages rendered here -->
-                                </div>
-                                <div class="chat-input-area">
-                                    <i class="fa fa-smile-o"></i>
-                                    <input type="file" id="attachment-input" style="display: none;">
-                                    <i class="fa fa-paperclip" id="btn-attach"></i>
-                                    <div class="input-wrapper">
-                                        <input type="text" id="msg-input" placeholder="Type a message">
-                                    </div>
-                                    <i class="fa fa-microphone" id="btn-send"></i>
                                 </div>
                             </div>
                         </div>
-					</div>
-				</div>
-			</div>
-		`);
+                    </div>
+                </div>
+            `);
 
             this.inject_styles();
             this.$container = this.page.main.find('#wats-container');
             this.bind_events();
-        } catch (e) {
-            console.error('[WhatsApp Chat] Layout preparation failed:', e);
-            frappe.msgprint(__('Failed to initialize WhatsApp layout: ' + e.message));
-        }
+        } catch (e) { console.error(e); }
     }
 
     inject_styles() {
         frappe.dom.set_style(`
-            .whatsapp-wrapper {
-                height: calc(100vh - 120px);
-                background: #f0f2f5;
-                padding: 20px;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            }
-            #wats-container {
-                width: 100%;
-                height: 100%;
-                max-width: 1600px;
-                background: white;
-                box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-                border-radius: 4px;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-            }
-            .setup-screen {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                align-items: center;
-                text-align: center;
-                padding: 40px;
-            }
+            .whatsapp-wrapper { height: calc(100vh - 120px); background: #f0f2f5; padding: 20px; display: flex; justify-content: center; }
+            #wats-container { width: 100%; height: 100%; max-width: 1600px; background: white; border-radius: 4px; overflow: hidden; display: flex; flex-direction: column; }
+            .setup-screen { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; }
             .main-icon { font-size: 80px; color: #25D366; margin-bottom: 20px; }
-            #qr-image { margin: 25px auto; width: 250px; height: 250px; background: #eee; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; }
-            #qr-image img { width: 100%; }
-            
-            /* Chat Interface Styles */
-            .chat-app { display: flex; height: 100%; width: 100%; background: #fff; }
-            .chat-sidebar { width: 30%; border-right: 1px solid #e9edef; display: flex; flex-direction: column; background: #fff; min-width: 300px; }
-            .chat-main { flex: 1; display: flex; flex-direction: column; background: #efeae2; position: relative; }
-            
+            #qr-image { margin: 25px auto; width: 250px; height: 250px; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; }
+            .chat-app { display: flex; height: 100%; width: 100%; }
+            .chat-sidebar { width: 30%; border-right: 1px solid #e9edef; display: flex; flex-direction: column; min-width: 300px; }
+            .chat-main { flex: 1; display: flex; flex-direction: column; background: #efeae2; }
             .sidebar-header { height: 60px; padding: 10px 16px; background: #f0f2f5; display: flex; justify-content: space-between; align-items: center; }
-            .user-avatar { width: 40px; height: 40px; background: #dfe5e7; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #54656f; font-size: 20px; }
-            .header-actions { display: flex; gap: 20px; color: #54656f; font-size: 18px; cursor: pointer; }
-            
-            .sidebar-search { padding: 8px 12px; background: #fff; }
+            .user-avatar { width: 40px; height: 40px; background: #dfe5e7; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+            .sidebar-search { padding: 8px 12px; }
             .search-input-wrapper { background: #f0f2f5; border-radius: 8px; padding: 6px 14px; display: flex; align-items: center; gap: 10px; }
-            .search-input-wrapper input { border: none; background: transparent; width: 100%; outline: none; font-size: 14px; }
-            .search-input-wrapper i { color: #54656f; font-size: 13px; }
-            
+            .search-input-wrapper input { border: none; background: transparent; width: 100%; outline: none; }
             .chat-list { flex: 1; overflow-y: auto; }
-            .chat-item { display: flex; padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #f5f6f6; transition: background 0.2s; }
-            .chat-item:hover { background: #f5f6f6; }
+            .chat-item { display: flex; padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #f5f6f6; }
             .chat-item.active { background: #ebebeb; }
-            .chat-item-avatar { width: 48px; height: 48px; background: #dfe5e7; border-radius: 50%; margin-right: 15px; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
-            .chat-item-content { flex: 1; overflow: hidden; border-bottom: 1px solid #e9edef; padding-bottom: 8px; }
-            .chat-item-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
-            .chat-item-name { font-weight: 500; color: #111b21; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .chat-item-time { font-size: 12px; color: #667781; }
-            .chat-item-bottom { display: flex; justify-content: space-between; align-items: center; }
-            .chat-item-msg { font-size: 14px; color: #667781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            
-            .chat-welcome { flex: 1; display: flex; align-items: center; justify-content: center; background: #f0f2f5; border-bottom: 6px solid #25D366; }
-            .welcome-content { text-align: center; max-width: 500px; color: #41525d; }
-            .welcome-content i { font-size: 100px; color: #cedae0; margin-bottom: 20px; }
-            .welcome-content h2 { font-weight: 300; margin-bottom: 10px; color: #41525d; }
-            .welcome-content p { font-size: 14px; line-height: 20px; color: #667781; }
-            .footer-note { margin-top: 40px; font-size: 13px; color: #8696a0; }
-            
+            .chat-item-avatar { width: 48px; height: 48px; background: #dfe5e7; border-radius: 50%; margin-right: 15px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+            .chat-item-content { flex: 1; overflow: hidden; }
+            .chat-item-name { font-weight: 500; }
+            .chat-item-time { font-size: 11px; color: #667781; float: right; }
+            .chat-item-msg { font-size: 13px; color: #667781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+            .archived-header { padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #f5f6f6; display: flex; align-items: center; gap: 10px; font-weight: 500; }
             .active-chat { height: 100%; display: flex; flex-direction: column; }
-            .chat-header { height: 60px; padding: 10px 16px; background: #f0f2f5; display: flex; justify-content: space-between; align-items: center; border-left: 1px solid #d1d7db; }
+            .chat-header { height: 60px; padding: 10px 16px; background: #f0f2f5; display: flex; align-items: center; border-left: 1px solid #d1d7db; }
             .chat-info { display: flex; align-items: center; gap: 12px; }
-            .chat-avatar { width: 40px; height: 40px; background: #dfe5e7; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-            .chat-details h5 { margin: 0; font-size: 16px; font-weight: 500; }
-            .chat-details p { margin: 0; font-size: 12px; color: #667781; }
-            
-            .message-thread { flex: 1; overflow-y: auto; padding: 20px 7%; display: flex; flex-direction: column; gap: 2px; }
-            .message-bubble { max-width: 65%; padding: 6px 10px 8px; border-radius: 8px; font-size: 14px; position: relative; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13); margin-bottom: 4px; }
-            .msg-in { align-self: flex-start; background: #fff; border-top-left-radius: 0; }
-            .msg-out { align-self: flex-end; background: #dcf8c6; border-top-right-radius: 0; }
-            .msg-meta { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: #667781; }
-            
-            .chat-input-area { padding: 5px 10px; background: #f0f2f5; display: flex; align-items: center; gap: 15px; min-height: 62px; }
-            .chat-input-area i { color: #54656f; font-size: 24px; cursor: pointer; }
-            .input-wrapper { flex: 1; background: #fff; border-radius: 8px; padding: 9px 12px; }
-            .input-wrapper input { border: none; width: 100%; outline: none; font-size: 15px; }
+            .message-thread { flex: 1; overflow-y: auto; padding: 20px 7%; display: flex; flex-direction: column; gap: 5px; }
+            .message-bubble { max-width: 65%; padding: 8px 12px; border-radius: 8px; font-size: 14px; position: relative; box-shadow: 0 1px 0.5px rgba(0,0,0,0.1); }
+            .msg-in { align-self: flex-start; background: #fff; }
+            .msg-out { align-self: flex-end; background: #dcf8c6; }
+            .msg-meta { font-size: 10px; color: #667781; margin-top: 4px; text-align: right; }
+            .chat-input-area { padding: 10px; background: #f0f2f5; display: flex; align-items: center; gap: 10px; }
+            .input-wrapper { flex: 1; background: #fff; border-radius: 8px; padding: 8px 12px; }
+            .input-wrapper input { border: none; width: 100%; outline: none; }
+            .lock-icon { color: #8696a0; margin-right: 5px; }
         `);
     }
 
     bind_events() {
         this.$container.find('.btn-connect').on('click', () => this.initialize_session());
-        this.$container.find('.btn-disconnect').on('click', () => this.disconnect_session());
-        this.$container.find('.btn-cancel-qr').on('click', () => {
-            if (this.poll_interval) clearInterval(this.poll_interval);
-            if (this.timer_interval) clearInterval(this.timer_interval);
-            this.show_state('init');
-        });
+        this.$container.find('.btn-cancel-qr').on('click', () => this.show_state('init'));
 
-        // Chat Input events
-        this.$container.find('#msg-input').on('keypress', (e) => {
-            if (e.which == 13) {
-                this.send_selected_message();
-            }
-        });
+        this.$container.find('#msg-input').on('keypress', (e) => { if (e.which == 13) this.send_selected_message(); });
         this.$container.find('#btn-send').on('click', () => this.send_selected_message());
+        this.$container.find('#btn-attach').on('click', () => this.$container.find('#attachment-input').click());
+        this.$container.find('#attachment-input').on('change', (e) => this.handle_attachment(e));
 
-        // Attachment events
-        this.$container.find('#btn-attach').on('click', () => {
-            this.$container.find('#attachment-input').click();
-        });
-        // Search events
         this.$container.find('.sidebar-search input').on('input', (e) => {
-            const query = $(e.target).val().toLowerCase();
-            this.filter_chats(query);
+            this.current_search_query = $(e.target).val().toLowerCase();
+            this.render_chat_list(this.all_chats_ref);
         });
-    }
 
-    filter_chats(query) {
-        this.$container.find('.chat-item').each((i, el) => {
-            const $item = $(el);
-            const name = ($item.data('name') || '').toLowerCase();
-            const id = ($item.data('id') || '').toLowerCase();
-            if (name.includes(query) || id.includes(query)) {
-                $item.show();
-            } else {
-                $item.hide();
-            }
+        // Click Event via Delegation
+        this.$container.on('click', '.chat-item', (e) => {
+            const $item = $(e.currentTarget);
+            this.open_chat($item.data('id'), $item.data('name'));
+        });
+
+        // Context Menu via Delegation
+        this.$container.on('contextmenu', '.chat-item', (e) => {
+            e.preventDefault();
+            const chatId = $(e.currentTarget).data('id');
+            const chat = this.all_chats_ref.find(c => c.id === chatId);
+            if (!chat) return;
+
+            const menu = [
+                { label: chat.archived ? 'Unarchive' : 'Archive', action: () => this.archive_chat(chatId, !chat.archived) },
+                {
+                    label: chat.lockedPassword ? 'Unlock' : 'Lock with Password', action: () => {
+                        if (chat.lockedPassword) this.lock_chat(chatId, null);
+                        else {
+                            frappe.prompt('Enter passcode to lock:', ({ value }) => {
+                                if (value) this.lock_chat(chatId, value);
+                            }, 'Privacy Lock', 'password');
+                        }
+                    }
+                }
+            ];
+            frappe.ui.form.make_menu_from_items(menu, e);
         });
     }
 
     async check_status() {
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'GET',
-                path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}`
-            },
+            args: { method: 'GET', path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}` },
             callback: (r) => {
                 const data = r.message || {};
-                if (data.status === 'error') {
-                    frappe.show_alert({ message: __('Gateway error: ' + data.message), indicator: 'red' });
-                    this.show_state('init');
-                    return;
-                }
-                if (data.status === 'ready') {
-                    this.show_state('connected');
-                    this.fetch_chats();
-                } else if (data.status === 'qr_ready') {
-                    if (data.qr) this.render_qr(data.qr);
-                    this.show_state('qr');
-                    this.start_polling();
-                } else if (data.status === 'initializing' || data.status === 'connecting' || data.status === 'authenticated') {
-                    this.show_state('qr');
-                    this.start_polling();
-                } else {
-                    this.show_state('init');
-                }
-            },
-            error: () => this.show_state('init')
+                if (data.status === 'ready') { this.show_state('connected'); this.fetch_chats(); }
+                else if (data.status === 'qr_ready') { if (data.qr) this.render_qr(data.qr); this.show_state('qr'); this.start_polling(); }
+                else if (['initializing', 'connecting', 'authenticated'].includes(data.status)) { this.show_state('qr'); this.start_polling(); }
+                else { this.show_state('init'); }
+            }
         });
     }
 
     async initialize_session() {
-        if (this.poll_interval) clearInterval(this.poll_interval);
         this.show_state('qr');
-        this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
-
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'POST',
-                path: 'api/whatsapp/init',
-                data: { userId: frappe.session.user }
-            },
-            callback: (r) => {
-                const data = r.message || {};
-                if (data.status === 'initializing' || data.status === 'qr_ready') {
-                    this.start_polling();
-                }
-            }
+            args: { method: 'POST', path: 'api/whatsapp/init', data: { userId: frappe.session.user } },
+            callback: (r) => this.start_polling()
         });
     }
 
@@ -333,473 +216,194 @@ erpnextwats.WhatsAppChat = class {
         this.poll_interval = setInterval(() => {
             frappe.call({
                 method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-                args: {
-                    method: 'GET',
-                    path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}`
-                },
+                args: { method: 'GET', path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}` },
                 callback: (r) => {
                     const data = r.message || {};
-                    if (data.status === 'qr_ready' && data.qr) {
-                        this.render_qr(data.qr);
-                    } else if (data.status === 'ready') {
-                        clearInterval(this.poll_interval);
-                        if (this.timer_interval) clearInterval(this.timer_interval);
-                        this.show_state('connected');
-                        this.fetch_chats();
-                    } else if (data.status === 'authenticated' || data.status === 'connecting') {
-                        if (this.timer_interval) clearInterval(this.timer_interval);
-                        this.$container.find('.qr-timer-wrapper').hide();
-                        this.$container.find('.status-text').text('Authenticated! Syncing your chats...');
-                        this.$container.find('#qr-image').html('<div class="spinner-border text-primary" role="status"></div>');
-                    }
+                    if (data.status === 'qr_ready' && data.qr) this.render_qr(data.qr);
+                    else if (data.status === 'ready') { clearInterval(this.poll_interval); this.show_state('connected'); this.fetch_chats(); }
                 }
             });
         }, 3000);
     }
-    
-    render_qr(qrData) {
-        if (this.last_qr === qrData) return;
-        this.last_qr = qrData;
-        this.$container.find('#qr-image').html(`<img src="${qrData}">`);
-        this.start_qr_timer();
-    }
 
-    start_qr_timer() {
-        if (this.timer_interval) clearInterval(this.timer_interval);
-
-        let timeLeft = 60; // Standard WA QR expiry is around 60s
-        const $timer = this.$container.find('.qr-countdown');
-        const $wrapper = this.$container.find('.qr-timer-wrapper');
-
-        $wrapper.show();
-        $timer.text(timeLeft);
-
-        this.timer_interval = setInterval(() => {
-            timeLeft--;
-            $timer.text(timeLeft);
-
-            if (timeLeft <= 0) {
-                clearInterval(this.timer_interval);
-                $timer.text('Refreshing...');
-            }
-        }, 1000);
+    render_qr(qr) {
+        if (this.last_qr === qr) return;
+        this.last_qr = qr;
+        this.$container.find('#qr-image').html(`<img src="${qr}" style="width:100%;">`);
     }
 
     show_state(state) {
         this.$container.find('.setup-screen, .chat-app, .wats-loading').hide();
         if (state === 'init') this.$container.find('.wats-init').show();
         if (state === 'qr') this.$container.find('.wats-qr').show();
-        if (state === 'connected') {
-            this.$container.find('.wats-connected').show();
-            this.init_socket();
-        }
+        if (state === 'connected') { this.$container.find('.wats-connected').show(); this.init_socket(); }
     }
 
     init_socket() {
-        if (this.socket) return;
-
-        // Wait for script to load
-        if (!window.io) {
-            setTimeout(() => this.init_socket(), 1000);
-            return;
-        }
-
-        // Use the VPS domain but port 3000
-        const socketUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
-        console.log('[Socket] Attempting connection to:', socketUrl);
-
-        this.socket = io(socketUrl, {
-            transports: ['websocket', 'polling'],
-            reconnectionAttempts: 3,
-            timeout: 5000,
-            autoConnect: true
-        });
-
-        this.socket.on('connect_error', (err) => {
-            console.warn('[Socket] Real-time connection unavailable (Port 3000 likely blocked). Switching to poll mode.');
-            this.socket.disconnect();
-            // We already have polling running as backup, so we just stay silent.
-        });
-
-        this.socket.on('connect', () => {
-            console.log('[Socket] Connected to gateway');
-        });
-
-        this.socket.on(`new_message:${this.id}`, (data) => {
-            console.log('[Socket] New message received:', data);
-
-            // 1. Play sound
-            this.notif_sound.play().catch(e => console.warn("Sound blocked by browser", e));
-
-            // 2. Refresh active chat if it matches
-            if (this.current_chat_id === data.chatId) {
-                this.fetch_messages(this.current_chat_id);
-            }
-
-            // 3. Always refresh chat list to show unread count/last message
+        if (this.socket || !window.io) return;
+        const url = window.location.protocol + '//' + window.location.hostname + ':3000';
+        this.socket = io(url, { transports: ['websocket', 'polling'], reconnectionAttempts: 3 });
+        this.socket.on(`new_message:${this.id}`, (d) => {
+            this.notif_sound.play().catch(() => { });
+            if (this.current_chat_id === d.chatId) this.fetch_messages(d.chatId);
             this.fetch_chats();
-
-            // 4. Show Browser Notification
-            if (Notification.permission === "granted") {
-                new Notification("New WhatsApp Message", {
-                    body: "You have a new message.",
-                    icon: "https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg"
-                });
-            } else if (Notification.permission !== "denied") {
-                Notification.requestPermission();
-            }
-        });
-    }
-
-    async disconnect_session() {
-        frappe.confirm('Are you sure you want to disconnect?', () => {
-            frappe.call({
-                method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-                args: {
-                    method: 'POST',
-                    path: 'api/whatsapp/disconnect',
-                    data: { userId: frappe.session.user }
-                },
-                callback: () => this.show_state('init')
-            });
         });
     }
 
     async fetch_chats() {
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'GET',
-                path: `api/whatsapp/chats/${encodeURIComponent(frappe.session.user)}`
-            },
+            args: { method: 'GET', path: `api/whatsapp/chats/${encodeURIComponent(frappe.session.user)}` },
             callback: (r) => {
                 const chats = r.message || [];
-                if (!Array.isArray(chats)) return;
-
-                // Fingerprint includes active ID so highlighting updates immediately
-                const current_fingerprint = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}`).join('|') + `|${this.current_chat_id}`;
-                if (this.last_chats_fingerprint === current_fingerprint) {
-                    return;
-                }
-
-                this.last_chats_fingerprint = current_fingerprint;
+                this.all_chats_ref = chats;
+                const fp = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}:${c.archived}:${c.lockedPassword ? 'L' : ''}`).join('|') + `|${this.current_chat_id}|${this.current_search_query}`;
+                if (this.last_chats_fp === fp) return;
+                this.last_chats_fp = fp;
                 this.render_chat_list(chats);
             }
         });
-
-        // Refresh chats every 10 seconds
-        if (!this.chat_refresh_interval) {
-            this.chat_refresh_interval = setInterval(() => this.fetch_chats(), 10000);
-        }
+        if (!this.chat_refresh_interval) this.chat_refresh_interval = setInterval(() => this.fetch_chats(), 10000);
     }
 
     render_chat_list(chats) {
-        if (!Array.isArray(chats)) return;
+        const $list = this.$container.find('#chat-list').empty();
+        const search = (this.current_search_query || '').toLowerCase();
+        const normal = [], arch = [], locked_match = [];
 
-        const $list = this.$container.find('#chat-list');
-        const activeId = this.current_chat_id;
-        $list.empty();
-
-        chats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(chat => {
-            const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-            const lastMsg = chat.lastMessage ? chat.lastMessage.body : 'No messages';
-            const isActive = this.current_chat_id === chat.id ? 'active' : '';
-
-            const html = `
-                <div class="chat-item ${isActive}" data-id="${chat.id}" data-name="${chat.name}">
-                    <div class="chat-item-avatar" id="avatar-${chat.id.replace(/[^a-zA-Z0-9]/g, '-')}"><i class="fa fa-${chat.isGroup ? 'users' : 'user'}"></i></div>
-                    <div class="chat-item-content">
-                        <div class="chat-item-top">
-                            <span class="chat-item-name">${chat.name || chat.id.split('@')[0]}</span>
-                            <span class="chat-item-time">${time}</span>
-                        </div>
-                        <div class="chat-item-bottom">
-                            <span class="chat-item-msg">${lastMsg}</span>
-                            ${chat.unreadCount > 0 ? `<span class="badge badge-pill badge-success">${chat.unreadCount}</span>` : ''}
-                        </div>
-                    </div>
-                </div>
-            `;
-            const $item = $(html).appendTo($list);
-            $item.on('click', () => this.open_chat(chat.id, chat.name));
-
-            // Fetch avatar asynchronously with caching
-            this.fetch_avatar(chat.id, $item.find('.chat-item-avatar'));
-        });
-    }
-
-    async open_chat(chatId, chatName) {
-        console.log('[WhatsApp Chat] Opening chat:', chatId);
-        this.current_chat_id = chatId;
-        this.last_msg_fingerprint = null; // Clear fingerprint so new chat loads instantly
-
-        // UI Updates for active state
-        this.$container.find('.chat-item').removeClass('active');
-        this.$container.find('.chat-item').filter(function () {
-            return $(this).attr('data-id') === chatId;
-        }).addClass('active');
-
-        this.$container.find('.chat-welcome').hide();
-        this.$container.find('.active-chat').show();
-        this.$container.find('.chat-target-name').text(chatName);
-
-        // Clear thread UI immediately and show loading
-        this.$container.find('#message-thread').empty().html('<div class="text-center p-5"><div class="spinner-border text-muted"></div></div>');
-
-        // Fetch avatar for active chat
-        this.fetch_avatar(chatId, this.$container.find('.chat-header .chat-avatar'));
-
-        this.fetch_messages(chatId);
-    }
-
-    async fetch_avatar(contactId, $el) {
-        if (!this.avatar_cache) this.avatar_cache = {};
-
-        if (this.avatar_cache[contactId]) {
-            if (this.avatar_cache[contactId] !== 'loading') {
-                $el.html(`<img src="${this.avatar_cache[contactId]}" style="width: 100%; height: 100%; border-radius: 50%;">`);
+        chats.forEach(c => {
+            if (c.lockedPassword) {
+                if (search && search === c.lockedPassword.toLowerCase()) locked_match.push(c);
+                return;
             }
-            return;
+            const match = (c.name || '').toLowerCase().includes(search) || c.id.toLowerCase().includes(search);
+            if (search && !match) return;
+            if (c.archived) arch.push(c);
+            else normal.push(c);
+        });
+
+        if (locked_match.length) {
+            $list.append('<div class="p-2 text-primary small font-weight-bold" style="background:#f0f2f5;"><i class="fa fa-lock"></i> Locked Conversations</div>');
+            locked_match.forEach(c => this.render_single_chat(c, $list));
         }
 
-        this.avatar_cache[contactId] = 'loading';
-        frappe.call({
-            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'GET',
-                path: `api/whatsapp/profile-pic/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(contactId)}`
-            },
-            callback: (r) => {
-                if (r.message && r.message.url) {
-                    this.avatar_cache[contactId] = r.message.url;
-                    $el.html(`<img src="${r.message.url}" style="width: 100%; height: 100%; border-radius: 50%;">`);
-                } else {
-                    this.avatar_cache[contactId] = 'none'; // Mark as not having one to avoid retries
-                }
-            }
-        });
-    }
+        normal.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(c => this.render_single_chat(c, $list));
 
-    async fetch_messages(chatId) {
-        if (this.current_chat_id !== chatId) return;
-
-        frappe.call({
-            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'GET',
-                path: `api/whatsapp/messages/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(chatId)}`
-            },
-            callback: (r) => {
-                const messages = r.message || [];
-                if (!Array.isArray(messages)) {
-                    this.$container.find('#message-thread div').remove(); // Clear spinner
-                    return;
-                }
-
-                // Message fingerprint to avoid redundant renders
-                const current_fingerprint = messages.map(m => m.id).join('|');
-                if (this.last_msg_fingerprint === current_fingerprint) return;
-
-                this.last_msg_fingerprint = current_fingerprint;
-                this.render_messages(messages);
-            },
-            error: () => {
-                this.$container.find('#message-thread').empty().html('<div class="text-center p-3 text-muted">Failed to load messages.</div>');
-            }
-        });
-
-        // Polling for messages in active chat
-        if (this.msg_refresh_interval) clearInterval(this.msg_refresh_interval);
-        this.msg_refresh_interval = setInterval(() => {
-            if (this.current_chat_id) this.fetch_messages(this.current_chat_id);
-        }, 4000);
-    }
-
-    render_messages(messages) {
-        const $thread = this.$container.find('#message-thread');
-        const oldScrollHeight = $thread[0].scrollHeight;
-        const oldScrollTop = $thread[0].scrollTop;
-        const isAtBottom = oldScrollHeight - oldScrollTop <= $thread[0].clientHeight + 50;
-
-        $thread.empty();
-        messages.forEach(msg => {
-            const time = new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dirClass = msg.fromMe ? 'msg-out' : 'msg-in';
-
-            let content = `<div class="msg-body">${msg.body}</div>`;
-            if (msg.hasMedia) {
-                content = this.get_media_placeholder(msg);
-            }
-
-            const html = `
-                <div class="message-bubble ${dirClass}" data-msg-id="${msg.id}">
-                    ${content}
-                    <div class="msg-meta">
-                        <span class="msg-time">${time}</span>
-                        ${msg.fromMe ? '<i class="fa fa-check"></i>' : ''}
-                    </div>
-                </div>
-            `;
-            const $msg = $(html).appendTo($thread);
-            if (msg.hasMedia) {
-                this.load_media(msg, $msg.find('.media-container'));
-            }
-        });
-
-        if (isAtBottom) {
-            $thread.scrollTop($thread[0].scrollHeight);
+        if (arch.length) {
+            const $h = $(`<div class="archived-header"><i class="fa fa-archive"></i> <span style="flex:1">Archived (${arch.length})</span><i class="fa fa-chevron-${this.archived_expanded ? 'up' : 'down'}"></i></div>`).appendTo($list);
+            $h.on('click', () => { this.archived_expanded = !this.archived_expanded; this.render_chat_list(chats); });
+            if (this.archived_expanded) arch.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(c => this.render_single_chat(c, $list));
         }
     }
 
-    get_media_placeholder(msg) {
-        let icon = 'fa-file-o';
-        if (msg.type === 'image') icon = 'fa-picture-o';
-        if (msg.type === 'video') icon = 'fa-video-camera';
-        if (msg.type === 'audio' || msg.type === 'ptt') icon = 'fa-microphone';
-        if (msg.type === 'document' || msg.type === 'ppt') icon = 'fa-file-text-o';
-
-
-        return `
-            <div class="media-container" data-msg-id="${msg.id}" style="min-width: 200px; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 4px; margin-bottom: 5px; cursor: pointer;">
-                <div class="media-loader">
-                    <i class="fa ${icon}" style="font-size: 30px; color: #8696a0;"></i>
-                    <div class="spinner-border spinner-border-sm text-secondary ml-2" role="status"></div>
+    render_single_chat(c, $list) {
+        const time = c.timestamp ? new Date(c.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const active = this.current_chat_id === c.id ? 'active' : '';
+        const html = `
+            <div class="chat-item ${active}" data-id="${c.id}" data-name="${c.name || c.id}">
+                <div class="chat-item-avatar" id="av-${c.id.replace(/[^a-zA-Z]/g, '')}"><i class="fa fa-${c.isGroup ? 'users' : 'user'}"></i></div>
+                <div class="chat-item-content">
+                    <div class="chat-item-top"><span class="chat-item-name">${c.name || c.id.split('@')[0]}</span><span class="chat-item-time">${time}</span></div>
+                    <div class="chat-item-bottom"><span class="chat-item-msg">${c.lockedPassword ? '<i class="fa fa-lock lock-icon"></i> Locked' : (c.lastMessage ? c.lastMessage.body : '')}</span></div>
                 </div>
             </div>
-            ${msg.body ? `<div class="msg-body">${msg.body}</div>` : ''}
         `;
+        const $el = $(html).appendTo($list);
+        this.fetch_avatar(c.id, $el.find('.chat-item-avatar'));
     }
 
-    load_media(msg, $container) {
-        if (!this.media_cache) this.media_cache = {};
+    async open_chat(id, name) {
+        this.current_chat_id = id;
+        this.last_msg_fp = null;
+        this.$container.find('.chat-item').removeClass('active');
+        this.$container.find(`.chat-item[data-id="${id}"]`).addClass('active');
+        this.$container.find('.chat-welcome').hide();
+        this.$container.find('.active-chat').show();
+        this.$container.find('.chat-target-name').text(name);
+        this.$container.find('#message-thread').empty().html('<div class="text-center p-5"><div class="spinner-border text-muted"></div></div>');
+        this.fetch_avatar(id, this.$container.find('.chat-header .chat-avatar'));
+        this.fetch_messages(id);
+    }
 
-        if (this.media_cache[msg.id]) {
-            if (this.media_cache[msg.id] !== 'loading') {
-                this.render_media_content(msg, this.media_cache[msg.id], $container);
-            }
-            return;
-        }
-
-        this.media_cache[msg.id] = 'loading';
+    async fetch_avatar(cid, $el) {
+        if (!this.av_cache) this.av_cache = {};
+        if (this.av_cache[cid]) { if (this.av_cache[cid] !== 'loading' && this.av_cache[cid] !== 'none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); return; }
+        this.av_cache[cid] = 'loading';
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'GET',
-                path: `api/whatsapp/media/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(msg.id)}`
-            },
-            callback: (r) => {
-                if (r.message && r.message.data) {
-                    const data = {
-                        data: `data:${r.message.mimetype};base64,${r.message.data}`,
-                        mimetype: r.message.mimetype
-                    };
-                    this.media_cache[msg.id] = data;
-                    this.render_media_content(msg, data, $container);
-                } else {
-                    this.media_cache[msg.id] = 'error';
-                    $container.html('<i class="fa fa-exclamation-triangle"></i> Failed to load media');
-                }
-            }
+            args: { method: 'GET', path: `api/whatsapp/profile-pic/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(cid)}` },
+            callback: (r) => { this.av_cache[cid] = (r.message && r.message.url) ? r.message.url : 'none'; if (this.av_cache[cid] !== 'none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); }
         });
     }
 
-    render_media_content(msg, media, $container) {
-        const data = media.data;
-        if (msg.type === 'image') {
-            $container.html(`<img src="${data}" style="max-width: 100%; border-radius: 4px;">`);
-        } else if (msg.type === 'video') {
-            $container.html(`<video src="${data}" controls style="max-width: 100%; border-radius: 4px;"></video>`);
-        } else if (msg.type === 'audio' || msg.type === 'ptt') {
-            $container.html(`<audio src="${data}" controls style="max-width: 100%;"></audio>`);
-        } else if (msg.type === 'document' || msg.type === 'ppt') {
-            let fileIcon = 'fa-file-o';
-            if (media.mimetype.includes('pdf')) fileIcon = 'fa-file-pdf-o';
-            if (media.mimetype.includes('word')) fileIcon = 'fa-file-word-o';
-            if (media.mimetype.includes('excel')) fileIcon = 'fa-file-excel-o';
-            if (media.mimetype.includes('powerpoint')) fileIcon = 'fa-file-powerpoint-o';
-
-            $container.html(`
-                <div class="doc-msg" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(0,0,0,0.03); width: 100%;">
-                    <i class="fa ${fileIcon}" style="font-size: 24px; color: #8696a0;"></i>
-                    <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        ${msg.fileName || 'Document'}
-                    </div>
-                    <a href="${data}" download="${msg.fileName || 'file'}" class="btn btn-xs btn-outline-secondary">
-                        <i class="fa fa-download"></i>
-                    </a>
-                </div>
-            `);
-        }
-        $container.css('background', 'transparent');
-    }
-
-    async handle_attachment(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const $input = this.$container.find('#msg-input');
-        const text = $input.val();
-
-        frappe.show_alert({ message: __('Uploading attachment...'), indicator: 'blue' });
-
-        const base64 = await this.file_to_base64(file);
-        const data = base64.split(',')[1];
-
+    async fetch_messages(cid) {
+        if (this.current_chat_id !== cid) return;
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'POST',
-                path: 'api/whatsapp/send',
-                data: {
-                    userId: frappe.session.user,
-                    to: this.current_chat_id,
-                    message: text,
-                    media: {
-                        mimetype: file.type,
-                        data: data,
-                        filename: file.name
-                    }
-                }
-            },
+            args: { method: 'GET', path: `api/whatsapp/messages/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(cid)}` },
             callback: (r) => {
-                $input.val('');
-                this.fetch_messages(this.current_chat_id);
-                frappe.show_alert({ message: __('File sent!'), indicator: 'green' });
+                const msgs = r.message || [];
+                const fp = msgs.map(m => m.id).join('|');
+                if (this.last_msg_fp === fp) return;
+                this.last_msg_fp = fp;
+                this.render_messages(msgs);
             }
+        });
+        if (this.msg_refresh_timeout) clearTimeout(this.msg_refresh_timeout);
+        this.msg_refresh_timeout = setTimeout(() => { if (this.current_chat_id === cid) this.fetch_messages(cid); }, 5000);
+    }
+
+    render_messages(msgs) {
+        const $t = this.$container.find('#message-thread');
+        const scroll = $t[0].scrollHeight - $t[0].scrollTop <= $t[0].clientHeight + 50;
+        $t.empty();
+        msgs.forEach(m => {
+            const time = new Date(m.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            $t.append(`<div class="message-bubble ${m.fromMe ? 'msg-out' : 'msg-in'}">${m.body}<div class="msg-meta">${time}</div></div>`);
+        });
+        if (scroll) $t.scrollTop($t[0].scrollHeight);
+    }
+
+    async archive_chat(chatId, archive) {
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: { method: 'POST', path: 'api/whatsapp/archive', data: { userId: frappe.session.user, chatId, archive } },
+            callback: () => { frappe.show_alert(archive ? 'Chat Archived' : 'Chat Unarchived'); this.fetch_chats(); }
         });
     }
 
-    file_to_base64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = error => reject(error);
+    async lock_chat(chatId, password) {
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+            args: { method: 'POST', path: 'api/whatsapp/lock', data: { userId: frappe.session.user, chatId, password } },
+            callback: () => { frappe.show_alert(password ? 'Chat Locked' : 'Chat Unlocked'); this.fetch_chats(); }
         });
     }
 
     async send_selected_message() {
-        const $input = this.$container.find('#msg-input');
-        const text = $input.val();
-        const chatId = this.current_chat_id;
-        if (!text || !chatId) return;
-
-        $input.val('');
-
+        const $i = this.$container.find('#msg-input');
+        const text = $i.val();
+        if (!text || !this.current_chat_id) return;
+        $i.val('');
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
-            args: {
-                method: 'POST',
-                path: 'api/whatsapp/send',
-                data: {
-                    userId: frappe.session.user,
-                    to: chatId,
-                    message: text
-                }
-            },
-            callback: (r) => {
-                this.fetch_messages(chatId);
-            }
+            args: { method: 'POST', path: 'api/whatsapp/send', data: { userId: frappe.session.user, to: this.current_chat_id, message: text } },
+            callback: () => this.fetch_messages(this.current_chat_id)
         });
+    }
+
+    async handle_attachment(e) {
+        const file = e.target.files[0];
+        if (!file || !this.current_chat_id) return;
+        frappe.show_alert({ message: 'Sending file...', indicator: 'blue' });
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+            frappe.call({
+                method: 'erpnextwats.erpnextwats.api.proxy_to_service',
+                args: { method: 'POST', path: 'api/whatsapp/send', data: { userId: frappe.session.user, to: this.current_chat_id, message: '', media: { mimetype: file.type, data: reader.result.split(',')[1], filename: file.name } } },
+                callback: () => { frappe.show_alert({ message: 'File sent!', indicator: 'green' }); this.fetch_messages(this.current_chat_id); }
+            });
+        };
     }
 }
