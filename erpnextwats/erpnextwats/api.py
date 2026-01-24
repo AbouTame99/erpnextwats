@@ -90,3 +90,13 @@ def send_via_template(docname, doctype, template_id, phone=None):
     }
 
     return proxy_to_service("POST", "api/whatsapp/send", data)
+
+@frappe.whitelist()
+def render_template_preview(template_id, docname):
+    """Renders a template's message using a reference document."""
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_id)
+        doc = frappe.get_doc(template.doctype_name, docname)
+        return frappe.render_template(template.message, {"doc": doc})
+    except Exception as e:
+        return f"Error rendering preview: {str(e)}"
