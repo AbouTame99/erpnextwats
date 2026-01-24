@@ -13,6 +13,9 @@ if [ ! -d "node_modules" ]; then
 else
     echo "Dependencies already installed."
 fi
+# Ensure Chrome is installed for Puppeteer
+echo "Checking/Installing Chrome for Puppeteer..."
+npx puppeteer browsers install chrome
 
 # Start the gateway
 exec /usr/bin/node erpnextwats/whatsapp_gateway.js
