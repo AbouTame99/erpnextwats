@@ -264,32 +264,9 @@ class WhatsAppSession {
             if (sentMsg) await this.saveMessage(sentMsg);
             return sentMsg;
         } catch (e) {
-            console.error(`[${this.userId}] sendMessage error catch:`, e.message);
-            // Some "markedUnread" errors are non-fatal internal puppeteer errors, 
-            // the message might actually have been sent.
-            if (e.message.includes('markedUnread')) {
-                console.warn(`[${this.userId}] Ignored internal library error 'markedUnread' - Manually saving placeholder`);
-
-                // Construct a synthetic sent message to ensure it shows up in DB
-                const syntheticMsg = {
-                    id: { _serialized: 'synthetic-' + Date.now() },
-                    from: 'me', // Will be handled correctly by saveMessage
-                    to: chatId,
-                    body: message,
-                    timestamp: Math.floor(Date.now() / 1000),
-                    fromMe: true,
-                    type: mediaData ? 'media' : 'chat',
-                    hasMedia: !!mediaData,
-                    fileName: mediaData ? mediaData.filename : null
-                };
-
-                // We need to slightly adjust how saveMessage handles 'me' sender
-                // Actually, let's just use the correct JIDs
-                syntheticMsg.from = this.client.info.wid._serialized;
-
-                await this.saveMessage(syntheticMsg);
-                return { status: 'maybe_sent', warning: e.message };
-            }
+            console.error(`[${this.userId}] sendMessage FAILED:`, e.message);
+            // The markedUnread error means the message failed to send
+            // DO NOT save fake messages - just report the error
             throw e;
         }
     }
