@@ -1,5 +1,6 @@
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const puppeteer = require('puppeteer');
 const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
@@ -36,6 +37,7 @@ class WhatsAppSession {
                 }),
                 puppeteer: {
                     headless: true,
+                    executablePath: puppeteer.executablePath(),
                     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 }
             });
