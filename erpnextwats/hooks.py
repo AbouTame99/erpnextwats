@@ -43,7 +43,10 @@ add_to_apps_screen = [
 
 # include js in doctype views
 doctype_js = {
-    "Sales Invoice" : "public/js/whatsapp_integration.js"
+    "Sales Invoice" : "public/js/whatsapp_integration.js",
+    "Purchase Invoice" : "public/js/whatsapp_integration.js",
+    "Sales Order" : "public/js/whatsapp_integration.js",
+    "Purchase Order" : "public/js/whatsapp_integration.js"
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}

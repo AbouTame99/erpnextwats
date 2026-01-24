@@ -31,33 +31,62 @@ def proxy_to_service(method, path, data=None):
         return {"status": "error", "message": str(e)}
 
 @frappe.whitelist()
-def send_whatsapp_on_invoice(docname):
-    """Generates a PDF for a Sales Invoice and sends it via WhatsApp."""
-    doc = frappe.get_doc("Sales Invoice", docname)
-    
-    # Get Customer Phone
-    customer = frappe.get_doc("Customer", doc.customer)
-    phone = customer.mobile_no or customer.phone
-    
-    if not phone:
-        frappe.throw(f"Customer {doc.customer} does not have a mobile number.")
+def get_templates(doctype):
+    """Returns available WhatsApp templates for a given DocType."""
+    return frappe.get_all("WhatsApp Template", 
+        filters={"doctype_name": doctype}, 
+        fields=["name", "template_name"])
 
-    # Generate PDF
-    pdf_content = frappe.get_print("Sales Invoice", docname, as_pdf=True)
-    b64_pdf = base64.b64encode(pdf_content).decode('utf-8')
+@frappe.whitelist()
+def send_via_template(docname, doctype, template_id, phone=None):
+    """Sends a message using a specific template."""
+    doc = frappe.get_doc(doctype, docname)
+    template = frappe.get_doc("WhatsApp Template", template_id)
 
-    # Prepare Payload
-    message = f"Hello {doc.customer}, please find attached your invoice {docname}. Thank you for your business!"
-    
+    # 1. Resolve Recipient Phone
+    recipient = phone
+    if not recipient:
+        # Try common phone fields
+        recipient = (getattr(doc, "mobile_no", None) or 
+                     getattr(doc, "phone", None) or 
+                     getattr(doc, "contact_mobile", None))
+        
+        # If it's a Customer linked doc, try customer record
+        if not recipient and getattr(doc, "customer", None):
+            cust = frappe.get_doc("Customer", doc.customer)
+            recipient = cust.mobile_no or cust.phone
+
+    if not recipient:
+        return {"status": "missing_phone", "message": "No phone number found for this document."}
+
+    # 2. Render Message (Jinja)
+    message = frappe.render_template(template.message, {"doc": doc})
+
+    # 3. Prepare Media
+    media = None
+    if template.attach_pdf:
+        pdf_content = frappe.get_print(doctype, docname, as_pdf=True)
+        media = {
+            "mimetype": "application/pdf",
+            "data": base64.b64encode(pdf_content).decode('utf-8'),
+            "filename": f"{docname}.pdf"
+        }
+    elif template.custom_media:
+        # Handle custom media file
+        file_doc = frappe.get_doc("File", {"file_url": template.custom_media})
+        content = file_doc.get_content()
+        media = {
+            "mimetype": file_doc.content_type or "application/octet-stream",
+            "data": base64.b64encode(content).decode('utf-8'),
+            "filename": file_doc.file_name
+        }
+
+    # 4. Push to Gateway
     data = {
         "userId": frappe.session.user,
-        "to": phone,
+        "to": recipient,
         "message": message,
-        "media": {
-            "mimetype": "application/pdf",
-            "data": b64_pdf,
-            "filename": f"Invoice_{docname}.pdf"
-        }
+        "media": media
     }
 
     return proxy_to_service("POST", "api/whatsapp/send", data)
