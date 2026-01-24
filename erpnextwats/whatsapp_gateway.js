@@ -3,7 +3,15 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
+
+// Helper to find Chrome/Chromium executable
+function getBrowserPath() {
+    return process.env.PUPPETEER_EXECUTABLE_PATH ||
+        '/usr/bin/google-chrome-stable' ||
+        '/usr/bin/google-chrome' ||
+        '/usr/bin/chromium-browser';
+}
 const sqlite3 = require('sqlite3').verbose();
 const http = require('http');
 const socketIo = require('socket.io');
@@ -64,7 +72,7 @@ class WhatsAppSession {
                 }),
                 puppeteer: {
                     headless: true,
-                    executablePath: puppeteer.executablePath(),
+                    executablePath: getBrowserPath(),
                     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 }
             });
