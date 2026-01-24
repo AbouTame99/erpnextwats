@@ -101,13 +101,46 @@ class WhatsAppSession {
         }
 
         // Format phone number
-        let phoneNumber = to.replace(/[^0-9]/g, '');
-        if (!phoneNumber.endsWith('@c.us')) {
-            phoneNumber = `${phoneNumber}@c.us`;
+        let chatId = to;
+        if (!chatId.includes('@')) {
+            chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
         }
 
-        console.log(`[${this.userId}] Sending message to ${phoneNumber}`);
-        await this.client.sendMessage(phoneNumber, message);
+        console.log(`[${this.userId}] Sending message to ${chatId}`);
+        return await this.client.sendMessage(chatId, message);
+    }
+
+    async getChats() {
+        if (!this.client || this.status !== 'ready') return [];
+        const chats = await this.client.getChats();
+        return chats.map(chat => ({
+            id: chat.id._serialized,
+            name: chat.name,
+            unreadCount: chat.unreadCount,
+            lastMessage: chat.lastMessage ? {
+                body: chat.lastMessage.body,
+                timestamp: chat.lastMessage.timestamp,
+                fromMe: chat.lastMessage.fromMe
+            } : null,
+            isGroup: chat.isGroup,
+            timestamp: chat.timestamp
+        }));
+    }
+
+    async getMessages(chatId, limit = 50) {
+        if (!this.client || this.status !== 'ready') return [];
+        const chat = await this.client.getChatById(chatId);
+        const messages = await chat.fetchMessages({ limit });
+        return messages.map(m => ({
+            id: m.id._serialized,
+            body: m.body,
+            from: m.from,
+            to: m.to,
+            timestamp: m.timestamp,
+            fromMe: m.fromMe,
+            type: m.type,
+            hasMedia: m.hasMedia
+        }));
     }
 
     async disconnect() {
@@ -137,7 +170,7 @@ app.post('/api/whatsapp/init', async (req, res) => {
         }
 
         // If disconnected or error, clean up and restart
-        if (sessions[userId].status === 'disconnected' || sessions[userId].status === 'error') {
+        if (sessions[userId].status === 'disconnected' || sessions[userId].status === 'error' || sessions[userId].status === 'auth_failure') {
             console.log(`[API] Session exists but is in ${sessions[userId].status} state, recreating...`);
             if (sessions[userId].client) {
                 try { await sessions[userId].client.destroy(); } catch (e) { }
@@ -173,6 +206,32 @@ app.get('/api/whatsapp/status/:userId', (req, res) => {
         status: session.status,
         qr: session.qrCode
     });
+});
+
+// Get all chats
+app.get('/api/whatsapp/chats/:userId', async (req, res) => {
+    const userId = req.params.userId;
+    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        const chats = await sessions[userId].getChats();
+        res.json(chats);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get messages for a chat
+app.get('/api/whatsapp/messages/:userId/:chatId', async (req, res) => {
+    const { userId, chatId } = req.params;
+    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        const messages = await sessions[userId].getMessages(chatId);
+        res.json(messages);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // Send message
