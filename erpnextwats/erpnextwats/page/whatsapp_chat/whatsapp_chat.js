@@ -406,8 +406,20 @@ erpnextwats.WhatsAppChat = class {
 
         // Use the VPS domain but port 3000
         const socketUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
-        console.log('[Socket] Connecting to:', socketUrl);
-        this.socket = io(socketUrl, { transports: ['websocket', 'polling'] });
+        console.log('[Socket] Attempting connection to:', socketUrl);
+
+        this.socket = io(socketUrl, {
+            transports: ['websocket', 'polling'],
+            reconnectionAttempts: 3,
+            timeout: 5000,
+            autoConnect: true
+        });
+
+        this.socket.on('connect_error', (err) => {
+            console.warn('[Socket] Real-time connection unavailable (Port 3000 likely blocked). Switching to poll mode.');
+            this.socket.disconnect();
+            // We already have polling running as backup, so we just stay silent.
+        });
 
         this.socket.on('connect', () => {
             console.log('[Socket] Connected to gateway');
@@ -464,10 +476,9 @@ erpnextwats.WhatsAppChat = class {
                 const chats = r.message || [];
                 if (!Array.isArray(chats)) return;
 
-                // Simple fingerprint to avoid redundant re-renders
-                const current_fingerprint = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}`).join('|');
+                // Fingerprint includes active ID so highlighting updates immediately
+                const current_fingerprint = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}`).join('|') + `|${this.current_chat_id}`;
                 if (this.last_chats_fingerprint === current_fingerprint) {
-                    console.log('[Frontend] Chats unchanged, skipping re-render');
                     return;
                 }
 
@@ -492,7 +503,7 @@ erpnextwats.WhatsAppChat = class {
         chats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(chat => {
             const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
             const lastMsg = chat.lastMessage ? chat.lastMessage.body : 'No messages';
-            const isActive = activeId === chat.id ? 'active' : '';
+            const isActive = this.current_chat_id === chat.id ? 'active' : '';
 
             const html = `
                 <div class="chat-item ${isActive}" data-id="${chat.id}" data-name="${chat.name}">
@@ -518,13 +529,22 @@ erpnextwats.WhatsAppChat = class {
     }
 
     async open_chat(chatId, chatName) {
+        console.log('[WhatsApp Chat] Opening chat:', chatId);
         this.current_chat_id = chatId;
+        this.last_msg_fingerprint = null; // Clear fingerprint so new chat loads instantly
+
+        // UI Updates for active state
         this.$container.find('.chat-item').removeClass('active');
-        this.$container.find(`.chat-item[data-id="${chatId}"]`).addClass('active');
+        this.$container.find('.chat-item').filter(function () {
+            return $(this).attr('data-id') === chatId;
+        }).addClass('active');
 
         this.$container.find('.chat-welcome').hide();
         this.$container.find('.active-chat').show();
         this.$container.find('.chat-target-name').text(chatName);
+
+        // Clear thread UI immediately and show loading
+        this.$container.find('#message-thread').empty().html('<div class="text-center p-5"><div class="spinner-border text-muted"></div></div>');
 
         // Fetch avatar for active chat
         this.fetch_avatar(chatId, this.$container.find('.chat-header .chat-avatar'));
@@ -571,7 +591,10 @@ erpnextwats.WhatsAppChat = class {
             },
             callback: (r) => {
                 const messages = r.message || [];
-                if (!Array.isArray(messages)) return;
+                if (!Array.isArray(messages)) {
+                    this.$container.find('#message-thread div').remove(); // Clear spinner
+                    return;
+                }
 
                 // Message fingerprint to avoid redundant renders
                 const current_fingerprint = messages.map(m => m.id).join('|');
@@ -579,6 +602,9 @@ erpnextwats.WhatsAppChat = class {
 
                 this.last_msg_fingerprint = current_fingerprint;
                 this.render_messages(messages);
+            },
+            error: () => {
+                this.$container.find('#message-thread').empty().html('<div class="text-center p-3 text-muted">Failed to load messages.</div>');
             }
         });
 
