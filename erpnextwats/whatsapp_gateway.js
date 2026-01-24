@@ -65,17 +65,29 @@ class WhatsAppSession {
                 }
 
                 if (connection === 'close') {
-                    const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                    console.log(`[${this.userId}] Connection closed. Should reconnect: ${shouldReconnect}`);
+                    const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+                    const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                    console.log(`[${this.userId}] Connection closed. StatusCode: ${statusCode}, Should reconnect: ${shouldReconnect}`);
+                    console.error(`[${this.userId}] Disconnect error details:`, lastDisconnect?.error);
 
                     if (shouldReconnect) {
-                        this.status = 'connecting';
-                        console.log(`[${this.userId}] Auto-reconnecting...`);
-                        // Add a small delay before reconnecting
-                        setTimeout(() => this.initialize(), 2000);
+                        // If 401 Unauthorized or 403 Forbidden, we should probably start fresh
+                        if (statusCode === 401 || statusCode === 403) {
+                            console.log(`[${this.userId}] Auth error (401/403). Clearing session and restarting...`);
+                            if (fs.existsSync(this.authDir)) {
+                                fs.rmSync(this.authDir, { recursive: true, force: true });
+                            }
+                            this.initialize();
+                        } else {
+                            this.status = 'connecting';
+                            console.log(`[${this.userId}] Reconnecting...`);
+                            // Add a small delay and retry
+                            setTimeout(() => this.initialize(), 2000);
+                        }
                     } else {
+                        console.log(`[${this.userId}] Logged out or fatal error. Cleaning up.`);
                         this.status = 'logged_out';
-                        // Clean up auth files
                         if (fs.existsSync(this.authDir)) {
                             fs.rmSync(this.authDir, { recursive: true, force: true });
                         }
