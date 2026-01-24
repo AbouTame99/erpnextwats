@@ -90,6 +90,10 @@ class WhatsAppSession {
                     clientId: this.safeId,
                     dataPath: this.authDir
                 }),
+                webVersionCache: {
+                    type: 'remote',
+                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+                },
                 puppeteer: browserOptions
             });
 
@@ -140,6 +144,11 @@ class WhatsAppSession {
         } catch (error) {
             console.error(`[${this.userId}] Initialization failed:`, error);
             this.status = 'error';
+            // Auto-retry once after 10 seconds if it's an injection error
+            if (error.message.includes('Evaluation failed') || error.message.includes('markedUnread')) {
+                console.log(`[${this.userId}] Retrying initialization in 10s...`);
+                setTimeout(() => this.initialize(), 10000);
+            }
         }
     }
 
@@ -169,10 +178,13 @@ class WhatsAppSession {
     }
 
     async saveMessage(msg) {
+        // Find the actual conversation partner (Remote JID)
+        const chatPartner = msg.fromMe ? msg.to : msg.from;
+
         return new Promise((resolve) => {
             this.db.run(`INSERT OR REPLACE INTO messages (id, chatId, body, sender, receiver, timestamp, fromMe, type, hasMedia, fileName) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [msg.id._serialized, msg.from, msg.body, msg.from, msg.to, msg.timestamp, msg.fromMe ? 1 : 0, msg.type, msg.hasMedia ? 1 : 0, msg.fileName || null],
+                [msg.id._serialized, chatPartner, msg.body || '', msg.from, msg.to, msg.timestamp, msg.fromMe ? 1 : 0, msg.type, msg.hasMedia ? 1 : 0, msg.fileName || null],
                 (err) => {
                     if (err) console.error(`[DB Error]`, err);
                     resolve();
@@ -186,9 +198,20 @@ class WhatsAppSession {
         try {
             const chats = await this.client.getChats();
             for (const chat of chats) {
+                // Save chat info
                 this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody)
                     VALUES (?, ?, ?, ?, ?, ?)`,
-                    [chat.id._serialized, chat.name, chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '']);
+                    [chat.id._serialized, chat.name || '', chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '']);
+
+                // Fetch and save last 20 messages for cada chat
+                try {
+                    const messages = await chat.fetchMessages({ limit: 20 });
+                    for (const m of messages) {
+                        await this.saveMessage(m);
+                    }
+                } catch (e) {
+                    console.warn(`[Sync Msg Error] for ${chat.name}:`, e.message);
+                }
             }
         } catch (e) {
             console.warn(`[Sync Error]`, e);
