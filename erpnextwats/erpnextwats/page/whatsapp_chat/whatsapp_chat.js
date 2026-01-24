@@ -28,7 +28,7 @@ erpnextwats.WhatsAppChat = class {
 
         // Inject Socket.io Client
         if (!window.io) {
-            frappe.dom.add_script('https://cdn.socket.io/4.7.2/socket.io.min.js');
+            frappe.require('https://cdn.socket.io/4.7.2/socket.io.min.js');
         }
 
         this.prepare_layout();
