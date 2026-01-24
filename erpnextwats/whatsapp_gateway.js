@@ -265,6 +265,15 @@ class WhatsAppSession {
         });
     }
 
+    async getProfilePicUrl(contactId) {
+        if (!this.client || this.status !== 'ready') return null;
+        try {
+            return await this.client.getProfilePicUrl(contactId);
+        } catch (e) {
+            return null;
+        }
+    }
+
     async getMedia(messageId) {
         if (!this.client || this.status !== 'ready') return null;
         const msg = await this.client.getMessageById(messageId);
@@ -439,6 +448,20 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Get profile picture
+app.get('/api/whatsapp/profile-pic/:userId/:contactId', async (req, res) => {
+    const userId = getSafeId(req.params.userId);
+    const { contactId } = req.params;
+    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
+
+    try {
+        const url = await sessions[userId].getProfilePicUrl(contactId);
+        res.json({ url });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // Function to resume sessions from disk on startup
 async function resumeSessions() {
