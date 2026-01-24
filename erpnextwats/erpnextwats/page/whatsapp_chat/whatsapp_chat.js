@@ -24,11 +24,7 @@ erpnextwats.WhatsAppChat = class {
     refresh() {
         this.page.clear_primary_action();
         this.page.clear_secondary_action();
-
-        if (!window.io) {
-            frappe.require('https://cdn.socket.io/4.7.2/socket.io.min.js');
-        }
-
+        if (!window.io) frappe.require('https://cdn.socket.io/4.7.2/socket.io.min.js');
         this.prepare_layout();
         this.check_status();
     }
@@ -65,7 +61,7 @@ erpnextwats.WhatsAppChat = class {
                                 <div class="sidebar-search">
                                     <div class="search-input-wrapper">
                                         <i class="fa fa-search"></i>
-                                        <input type="text" placeholder="Search or Enter Passcode">
+                                        <input type="text" id="sidebar-search-input" placeholder="Search chats or Enter Passcode">
                                     </div>
                                 </div>
                                 <div class="chat-list" id="chat-list"></div>
@@ -147,42 +143,35 @@ erpnextwats.WhatsAppChat = class {
     bind_events() {
         this.$container.find('.btn-connect').on('click', () => this.initialize_session());
         this.$container.find('.btn-cancel-qr').on('click', () => this.show_state('init'));
-
         this.$container.find('#msg-input').on('keypress', (e) => { if (e.which == 13) this.send_selected_message(); });
         this.$container.find('#btn-send').on('click', () => this.send_selected_message());
         this.$container.find('#btn-attach').on('click', () => this.$container.find('#attachment-input').click());
         this.$container.find('#attachment-input').on('change', (e) => this.handle_attachment(e));
-
         this.$container.find('.sidebar-search input').on('input', (e) => {
             this.current_search_query = $(e.target).val().toLowerCase();
             this.render_chat_list(this.all_chats_ref);
         });
 
-        // Click Event via Delegation
         this.$container.on('click', '.chat-item', (e) => {
             const $item = $(e.currentTarget);
             this.open_chat($item.data('id'), $item.data('name'));
         });
 
-        // Context Menu via Delegation
         this.$container.on('contextmenu', '.chat-item', (e) => {
             e.preventDefault();
             const chatId = $(e.currentTarget).data('id');
             const chat = this.all_chats_ref.find(c => c.id === chatId);
             if (!chat) return;
-
             const menu = [
                 { label: chat.archived ? 'Unarchive' : 'Archive', action: () => this.archive_chat(chatId, !chat.archived) },
-                {
-                    label: chat.lockedPassword ? 'Unlock' : 'Lock with Password', action: () => {
-                        if (chat.lockedPassword) this.lock_chat(chatId, null);
-                        else {
-                            frappe.prompt('Enter passcode to lock:', ({ value }) => {
-                                if (value) this.lock_chat(chatId, value);
-                            }, 'Privacy Lock', 'password');
-                        }
+                { label: chat.lockedPassword ? 'Unlock' : 'Lock with Password', action: () => {
+                    if (chat.lockedPassword) this.lock_chat(chatId, null);
+                    else {
+                        frappe.prompt('Enter passcode to lock:', ({ value }) => {
+                            if (value) this.lock_chat(chatId, value);
+                        }, 'Privacy Lock', 'password');
                     }
-                }
+                }}
             ];
             frappe.ui.form.make_menu_from_items(menu, e);
         });
@@ -193,10 +182,10 @@ erpnextwats.WhatsAppChat = class {
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: { method: 'GET', path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}` },
             callback: (r) => {
-                const data = r.message || {};
-                if (data.status === 'ready') { this.show_state('connected'); this.fetch_chats(); }
-                else if (data.status === 'qr_ready') { if (data.qr) this.render_qr(data.qr); this.show_state('qr'); this.start_polling(); }
-                else if (['initializing', 'connecting', 'authenticated'].includes(data.status)) { this.show_state('qr'); this.start_polling(); }
+                const d = r.message || {};
+                if (d.status === 'ready') { this.show_state('connected'); this.fetch_chats(); }
+                else if (d.status === 'qr_ready') { this.render_qr(d.qr); this.show_state('qr'); this.start_polling(); }
+                else if (['initializing','connecting','authenticated'].includes(d.status)) { this.show_state('qr'); this.start_polling(); }
                 else { this.show_state('init'); }
             }
         });
@@ -207,44 +196,43 @@ erpnextwats.WhatsAppChat = class {
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: { method: 'POST', path: 'api/whatsapp/init', data: { userId: frappe.session.user } },
-            callback: (r) => this.start_polling()
+            callback: () => this.start_polling()
         });
     }
 
     start_polling() {
-        if (this.poll_interval) clearInterval(this.poll_interval);
-        this.poll_interval = setInterval(() => {
+        if (this.poll_int) clearInterval(this.poll_int);
+        this.poll_int = setInterval(() => {
             frappe.call({
                 method: 'erpnextwats.erpnextwats.api.proxy_to_service',
                 args: { method: 'GET', path: `api/whatsapp/status/${encodeURIComponent(frappe.session.user)}` },
                 callback: (r) => {
-                    const data = r.message || {};
-                    if (data.status === 'qr_ready' && data.qr) this.render_qr(data.qr);
-                    else if (data.status === 'ready') { clearInterval(this.poll_interval); this.show_state('connected'); this.fetch_chats(); }
+                    const d = r.message || {};
+                    if (d.status === 'ready') { clearInterval(this.poll_int); this.show_state('connected'); this.fetch_chats(); }
+                    else if (d.qr) this.render_qr(d.qr);
                 }
             });
         }, 3000);
     }
 
     render_qr(qr) {
-        if (this.last_qr === qr) return;
+        if (!qr || this.last_qr === qr) return;
         this.last_qr = qr;
         this.$container.find('#qr-image').html(`<img src="${qr}" style="width:100%;">`);
     }
 
-    show_state(state) {
+    show_state(s) {
         this.$container.find('.setup-screen, .chat-app, .wats-loading').hide();
-        if (state === 'init') this.$container.find('.wats-init').show();
-        if (state === 'qr') this.$container.find('.wats-qr').show();
-        if (state === 'connected') { this.$container.find('.wats-connected').show(); this.init_socket(); }
+        if (s === 'init') this.$container.find('.wats-init').show();
+        if (s === 'qr') this.$container.find('.wats-qr').show();
+        if (s === 'connected') { this.$container.find('.wats-connected').show(); this.init_socket(); }
     }
 
     init_socket() {
         if (this.socket || !window.io) return;
-        const url = window.location.protocol + '//' + window.location.hostname + ':3000';
-        this.socket = io(url, { transports: ['websocket', 'polling'], reconnectionAttempts: 3 });
+        this.socket = io(window.location.protocol+'//'+window.location.hostname+':3000', { transports: ['websocket','polling'] });
         this.socket.on(`new_message:${this.id}`, (d) => {
-            this.notif_sound.play().catch(() => { });
+            this.notif_sound.play().catch(()=>{});
             if (this.current_chat_id === d.chatId) this.fetch_messages(d.chatId);
             this.fetch_chats();
         });
@@ -257,13 +245,13 @@ erpnextwats.WhatsAppChat = class {
             callback: (r) => {
                 const chats = r.message || [];
                 this.all_chats_ref = chats;
-                const fp = chats.map(c => `${c.id}:${c.timestamp}:${c.lastMessage ? c.lastMessage.body : ''}:${c.archived}:${c.lockedPassword ? 'L' : ''}`).join('|') + `|${this.current_chat_id}|${this.current_search_query}`;
+                const fp = chats.map(c => `${c.id}:${c.timestamp}:${c.archived}:${c.lockedPassword?'L':''}`).join('|') + `|${this.current_chat_id}|${this.current_search_query}`;
                 if (this.last_chats_fp === fp) return;
                 this.last_chats_fp = fp;
                 this.render_chat_list(chats);
             }
         });
-        if (!this.chat_refresh_interval) this.chat_refresh_interval = setInterval(() => this.fetch_chats(), 10000);
+        if (!this.chat_ref_int) this.chat_ref_int = setInterval(() => this.fetch_chats(), 10000);
     }
 
     render_chat_list(chats) {
@@ -272,39 +260,40 @@ erpnextwats.WhatsAppChat = class {
         const normal = [], arch = [], locked_match = [];
 
         chats.forEach(c => {
-            if (c.lockedPassword) {
+            const isLocked = c.lockedPassword && c.lockedPassword !== '';
+            if (isLocked) {
                 if (search && search === c.lockedPassword.toLowerCase()) locked_match.push(c);
                 return;
             }
-            const match = (c.name || '').toLowerCase().includes(search) || c.id.toLowerCase().includes(search);
+            const match = (c.name||'').toLowerCase().includes(search) || c.id.toLowerCase().includes(search);
             if (search && !match) return;
             if (c.archived) arch.push(c);
             else normal.push(c);
         });
 
         if (locked_match.length) {
-            $list.append('<div class="p-2 text-primary small font-weight-bold" style="background:#f0f2f5;"><i class="fa fa-lock"></i> Locked Conversations</div>');
+            $list.append('<div class="p-2 text-primary small font-weight-bold" style="background:#f0f2f5;"><i class="fa fa-unlock"></i> Unlocked Secret Chats</div>');
             locked_match.forEach(c => this.render_single_chat(c, $list));
         }
 
-        normal.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(c => this.render_single_chat(c, $list));
+        normal.sort((a,b) => (b.timestamp||0)-(a.timestamp||0)).forEach(c => this.render_single_chat(c, $list));
 
         if (arch.length) {
-            const $h = $(`<div class="archived-header"><i class="fa fa-archive"></i> <span style="flex:1">Archived (${arch.length})</span><i class="fa fa-chevron-${this.archived_expanded ? 'up' : 'down'}"></i></div>`).appendTo($list);
+            const $h = $(`<div class="archived-header"><i class="fa fa-archive"></i> <span style="flex:1">Archived (${arch.length})</span><i class="fa fa-chevron-${this.archived_expanded?'up':'down'}"></i></div>`).appendTo($list);
             $h.on('click', () => { this.archived_expanded = !this.archived_expanded; this.render_chat_list(chats); });
-            if (this.archived_expanded) arch.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).forEach(c => this.render_single_chat(c, $list));
+            if (this.archived_expanded) arch.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).forEach(c => this.render_single_chat(c, $list));
         }
     }
 
     render_single_chat(c, $list) {
-        const time = c.timestamp ? new Date(c.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const time = c.timestamp ? new Date(c.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
         const active = this.current_chat_id === c.id ? 'active' : '';
         const html = `
             <div class="chat-item ${active}" data-id="${c.id}" data-name="${c.name || c.id}">
-                <div class="chat-item-avatar" id="av-${c.id.replace(/[^a-zA-Z]/g, '')}"><i class="fa fa-${c.isGroup ? 'users' : 'user'}"></i></div>
+                <div class="chat-item-avatar" id="av-${c.id.replace(/[^a-zA-Z0-9]/g,'')}"><i class="fa fa-${c.isGroup?'users':'user'}"></i></div>
                 <div class="chat-item-content">
                     <div class="chat-item-top"><span class="chat-item-name">${c.name || c.id.split('@')[0]}</span><span class="chat-item-time">${time}</span></div>
-                    <div class="chat-item-bottom"><span class="chat-item-msg">${c.lockedPassword ? '<i class="fa fa-lock lock-icon"></i> Locked' : (c.lastMessage ? c.lastMessage.body : '')}</span></div>
+                    <div class="chat-item-bottom"><span class="chat-item-msg">${c.lockedPassword ? '<i class="fa fa-lock lock-icon"></i> Locked' : (c.lastMessage?c.lastMessage.body:'')}</span></div>
                 </div>
             </div>
         `;
@@ -317,7 +306,7 @@ erpnextwats.WhatsAppChat = class {
         this.last_msg_fp = null;
         this.$container.find('.chat-item').removeClass('active');
         this.$container.find(`.chat-item[data-id="${id}"]`).addClass('active');
-        this.$container.find('.chat-welcome').hide();
+        this.$container.find('.chat-welcome, .wats-loading').hide();
         this.$container.find('.active-chat').show();
         this.$container.find('.chat-target-name').text(name);
         this.$container.find('#message-thread').empty().html('<div class="text-center p-5"><div class="spinner-border text-muted"></div></div>');
@@ -327,12 +316,12 @@ erpnextwats.WhatsAppChat = class {
 
     async fetch_avatar(cid, $el) {
         if (!this.av_cache) this.av_cache = {};
-        if (this.av_cache[cid]) { if (this.av_cache[cid] !== 'loading' && this.av_cache[cid] !== 'none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); return; }
+        if (this.av_cache[cid]) { if (this.av_cache[cid]!=='loading' && this.av_cache[cid]!=='none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); return; }
         this.av_cache[cid] = 'loading';
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.proxy_to_service',
             args: { method: 'GET', path: `api/whatsapp/profile-pic/${encodeURIComponent(frappe.session.user)}/${encodeURIComponent(cid)}` },
-            callback: (r) => { this.av_cache[cid] = (r.message && r.message.url) ? r.message.url : 'none'; if (this.av_cache[cid] !== 'none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); }
+            callback: (r) => { this.av_cache[cid] = (r.message && r.message.url) ? r.message.url : 'none'; if (this.av_cache[cid]!=='none') $el.html(`<img src="${this.av_cache[cid]}" style="width:100%;">`); }
         });
     }
 
@@ -349,8 +338,8 @@ erpnextwats.WhatsAppChat = class {
                 this.render_messages(msgs);
             }
         });
-        if (this.msg_refresh_timeout) clearTimeout(this.msg_refresh_timeout);
-        this.msg_refresh_timeout = setTimeout(() => { if (this.current_chat_id === cid) this.fetch_messages(cid); }, 5000);
+        if (this.msg_ref_timeout) clearTimeout(this.msg_ref_timeout);
+        this.msg_ref_timeout = setTimeout(() => { if (this.current_chat_id === cid) this.fetch_messages(cid); }, 5000);
     }
 
     render_messages(msgs) {
@@ -358,8 +347,8 @@ erpnextwats.WhatsAppChat = class {
         const scroll = $t[0].scrollHeight - $t[0].scrollTop <= $t[0].clientHeight + 50;
         $t.empty();
         msgs.forEach(m => {
-            const time = new Date(m.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            $t.append(`<div class="message-bubble ${m.fromMe ? 'msg-out' : 'msg-in'}">${m.body}<div class="msg-meta">${time}</div></div>`);
+            const time = new Date(m.timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+            $t.append(`<div class="message-bubble ${m.fromMe?'msg-out':'msg-in'}">${m.body}<div class="msg-meta">${time}</div></div>`);
         });
         if (scroll) $t.scrollTop($t[0].scrollHeight);
     }
@@ -395,14 +384,13 @@ erpnextwats.WhatsAppChat = class {
     async handle_attachment(e) {
         const file = e.target.files[0];
         if (!file || !this.current_chat_id) return;
-        frappe.show_alert({ message: 'Sending file...', indicator: 'blue' });
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = () => {
             frappe.call({
                 method: 'erpnextwats.erpnextwats.api.proxy_to_service',
                 args: { method: 'POST', path: 'api/whatsapp/send', data: { userId: frappe.session.user, to: this.current_chat_id, message: '', media: { mimetype: file.type, data: reader.result.split(',')[1], filename: file.name } } },
-                callback: () => { frappe.show_alert({ message: 'File sent!', indicator: 'green' }); this.fetch_messages(this.current_chat_id); }
+                callback: () => this.fetch_messages(this.current_chat_id)
             });
         };
     }

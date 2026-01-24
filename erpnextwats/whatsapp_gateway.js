@@ -176,6 +176,18 @@ class WhatsAppSession {
                 archived INTEGER,
                 lockedPassword TEXT
             )`);
+
+            // Migration: Add columns if they don't exist
+            this.db.all('PRAGMA table_info(chats)', (err, rows) => {
+                if (err) return;
+                const columns = rows.map(r => r.name);
+                if (!columns.includes('archived')) {
+                    this.db.run('ALTER TABLE chats ADD COLUMN archived INTEGER DEFAULT 0');
+                }
+                if (!columns.includes('lockedPassword')) {
+                    this.db.run('ALTER TABLE chats ADD COLUMN lockedPassword TEXT');
+                }
+            });
         });
     }
 
@@ -200,10 +212,18 @@ class WhatsAppSession {
         try {
             const chats = await this.client.getChats();
             for (const chat of chats) {
+                // Native WhatsApp 'locked' property
+                const isNativeLocked = !!chat.locked;
+
                 // Save chat info
                 this.db.run(`INSERT OR REPLACE INTO chats (id, name, unreadCount, timestamp, isGroup, lastMsgBody, archived)
                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [chat.id._serialized, chat.name || '', chat.unreadCount, chat.timestamp, chat.isGroup ? 1 : 0, chat.lastMessage ? chat.lastMessage.body : '', chat.archived ? 1 : 0]);
+
+                if (isNativeLocked) {
+                    // Force the lock state if it was locked on phone but not yet in our DB
+                    this.db.run(`UPDATE chats SET lockedPassword = COALESCE(lockedPassword, 'locked') WHERE id = ?`, [chat.id._serialized]);
+                }
 
                 // Fetch and save last 20 messages for cada chat
                 try {
