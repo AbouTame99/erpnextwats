@@ -9,11 +9,12 @@ frappe.ui.form.on('WhatsApp Template', {
         frm.trigger('render_preview');
     },
     render_preview: function (frm) {
-        if (frm.doc.message && frm.doc.preview_doc) {
+        if (frm.doc.message && frm.doc.doctype_name && frm.doc.preview_doc) {
             frappe.call({
                 method: 'erpnextwats.erpnextwats.api.render_template_preview',
                 args: {
-                    template_id: frm.doc.name,
+                    doctype_name: frm.doc.doctype_name,
+                    message: frm.doc.message,
                     docname: frm.doc.preview_doc
                 },
                 callback: function (r) {
