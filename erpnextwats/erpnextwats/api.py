@@ -31,20 +31,69 @@ def proxy_to_service(method, path, data=None):
         return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}"}
 
 def get_rendering_context(doc):
-    """Prepares context for Jinja rendering, including customer balance."""
-    ctx = {"doc": doc}
+    """Prepares context for Jinja rendering, including exact custom balance logic."""
+    ctx = {"doc": doc, "customer_balance": "0.00"}
     
-    # Try to find customer and fetch balance
-    customer_id = getattr(doc, "customer", None)
-    if not customer_id and doc.doctype == "Customer":
-        customer_id = doc.name
+    # Try to find customer
+    party = getattr(doc, "customer", None)
+    if not party and doc.doctype == "Customer":
+        party = doc.name
         
-    if customer_id:
+    if party:
+        company = "Jiex Trading"
         try:
-            balance = get_balance_on(customer=customer_id)
-            ctx["customer_balance"] = frappe.fmt_money(balance)
-        except:
-            ctx["customer_balance"] = "0.00"
+            # 1. Fetch RAW GL Entries with Date Range
+            filters = {
+                "company": company,
+                "is_cancelled": 0,
+                "party": party,
+                "posting_date": ["between", ["2022-01-01", "2090-01-01"]]
+            }
+            
+            raw_data = frappe.get_all("GL Entry", 
+                filters=filters,
+                fields=["posting_date", "voucher_type", "voucher_no", "debit", "credit"],
+                order_by="posting_date asc",
+                ignore_permissions=True 
+            )
+            
+            # 2. Group by Voucher
+            net_data_map = {}
+            voucher_order = []
+            
+            for entry in raw_data:
+                v_no = entry.voucher_no
+                if v_no not in net_data_map:
+                    net_data_map[v_no] = {
+                        "debit": 0.0,
+                        "credit": 0.0
+                    }
+                    voucher_order.append(v_no)
+                
+                net_data_map[v_no]["debit"] += float(entry.debit)
+                net_data_map[v_no]["credit"] += float(entry.credit)
+
+            # 3. Calculate Final Balance
+            current_balance = 0.0
+            for v_no in voucher_order:
+                row = net_data_map[v_no]
+                d = row["debit"]
+                c = row["credit"]
+                
+                # Netting logic
+                if d >= c:
+                    final_d = d - c
+                    final_c = 0.0
+                else:
+                    final_c = c - d
+                    final_d = 0.0
+                    
+                current_balance += (final_d - final_c)
+            
+            ctx["customer_balance"] = frappe.fmt_money(current_balance)
+                
+        except Exception as e:
+            frappe.log_error(title="WhatsApp Balance Calc Error", message=str(e))
             
     return ctx
 
