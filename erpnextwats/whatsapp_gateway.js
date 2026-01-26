@@ -1,540 +1,171 @@
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
-const path = require('path');
 const fs = require('fs');
-const puppeteer = require('puppeteer');
-
-// Helper to find Chrome/Chromium executable
-function getBrowserPath() {
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
-
-    const paths = [
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/google-chrome',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium'
-    ];
-
-    for (const p of paths) {
-        if (fs.existsSync(p)) return p;
-    }
-
-    return undefined; // Let puppeteer try default if none found
-}
-const sqlite3 = require('sqlite3').verbose();
-const http = require('http');
-const socketIo = require('socket.io');
+const path = require('path');
 const app = express();
-const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: { origin: "*" }
-});
 const port = 3000;
 
-// Explicit path for persistence on CloudClusters
-const BASE_AUTH_DIR = '/cloudclusters/erpnext/frappe-bench/whatsapp_auth';
-if (!fs.existsSync(BASE_AUTH_DIR)) fs.mkdirSync(BASE_AUTH_DIR, { recursive: true });
-
-// Increase payload limits for media attachments (base64)
+// Increased limits for media attachments
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ limit: '60mb', extended: true }));
 
-// Global state to track sessions
+const BASE_AUTH_DIR = '/cloudclusters/erpnext/frappe-bench/whatsapp_auth';
+if (!fs.existsSync(BASE_AUTH_DIR)) fs.mkdirSync(BASE_AUTH_DIR, { recursive: true });
+
 const sessions = {};
 
-// Helper to sanitize userId for safe usage in IDs and paths
 function getSafeId(userId) {
-    if (!userId) return null;
-    return userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return userId ? userId.replace(/[^a-zA-Z0-9_-]/g, '_') : null;
 }
 
 class WhatsAppSession {
     constructor(userId) {
-        this.userId = userId; // Original email
-        this.safeId = getSafeId(userId); // Sanitized for paths/sockets
+        this.userId = userId;
+        this.safeId = getSafeId(userId);
         this.status = 'init';
         this.qrCode = null;
         this.client = null;
-        this.authDir = BASE_AUTH_DIR;
-        this.db = null;
-        this.dbPath = null;
     }
 
     async initialize() {
-        console.log(`[${this.userId}] Starting initialization (SafeID: ${this.safeId})...`);
+        if (this.status === 'initializing' || this.status === 'ready') return;
+
+        console.log(`[${this.userId}] Initializing...`);
         this.status = 'initializing';
 
-        try {
-            this.dbPath = path.join(this.authDir, `session-${this.safeId}`, 'history.db');
-
-            // Ensure session directory exists for DB
-            const sessDir = path.dirname(this.dbPath);
-            if (!fs.existsSync(sessDir)) fs.mkdirSync(sessDir, { recursive: true });
-
-            this.db = new sqlite3.Database(this.dbPath);
-            this.initDb();
-
-            const browserOptions = {
+        this.client = new Client({
+            authStrategy: new LocalAuth({
+                clientId: this.safeId,
+                dataPath: BASE_AUTH_DIR
+            }),
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1012170943-alpha.html'
+            },
+            puppeteer: {
                 headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-extensions']
-            };
-
-            const customPath = getBrowserPath();
-            if (customPath) {
-                browserOptions.executablePath = customPath;
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
             }
+        });
 
-            this.client = new Client({
-                authStrategy: new LocalAuth({
-                    clientId: this.safeId,
-                    dataPath: this.authDir
-                }),
-                webVersionCache: {
-                    type: 'remote',
-                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1012170943-alpha.html'
-                },
-                puppeteer: browserOptions
-            });
+        this.client.on('qr', async (qr) => {
+            console.log(`[${this.userId}] QR Received`);
+            this.qrCode = await qrcode.toDataURL(qr);
+            this.status = 'qr_ready';
+        });
 
-            this.client.on('qr', (qr) => {
-                console.log(`[${this.userId}] QR received`);
-                this.status = 'qr_ready';
-                qrcode.toDataURL(qr, (err, url) => {
-                    this.qrCode = url;
-                });
-            });
+        this.client.on('ready', () => {
+            console.log(`[${this.userId}] Ready!`);
+            this.status = 'ready';
+            this.qrCode = null;
+        });
 
-            this.client.on('authenticated', () => {
-                console.log(`[${this.userId}] Authenticated successfully! Syncing...`);
-                this.status = 'authenticated';
-                this.qrCode = null;
-            });
+        this.client.on('auth_failure', (msg) => {
+            console.error(`[${this.userId}] Auth Fail:`, msg);
+            this.status = 'auth_failure';
+        });
 
-            this.client.on('ready', () => {
-                console.log(`[${this.userId}] Client is ready!`);
-                this.status = 'ready';
-                this.syncHistory();
-            });
+        this.client.on('disconnected', (reason) => {
+            console.log(`[${this.userId}] Disconnected:`, reason);
+            this.status = 'disconnected';
+            delete sessions[this.safeId];
+        });
 
-            this.client.on('message', async (msg) => {
-                await this.saveMessage(msg);
-                // Emit on both original and safe ID to be absolutely safe
-                io.emit(`new_message:${this.userId}`, { chatId: msg.from, messageId: msg.id._serialized });
-                io.emit(`new_message:${this.safeId}`, { chatId: msg.from, messageId: msg.id._serialized });
-            });
-
-            this.client.on('message_create', async (msg) => {
-                if (msg.fromMe) {
-                    await this.saveMessage(msg);
-                }
-            });
-
-            this.client.on('auth_failure', (msg) => {
-                console.error(`[${this.userId}] Auth failure:`, msg);
-                this.status = 'auth_failure';
-            });
-
-            this.client.on('disconnected', (reason) => {
-                console.log(`[${this.userId}] Disconnected:`, reason);
-                this.status = 'disconnected';
-            });
-
-            await this.client.initialize();
-        } catch (error) {
-            console.error(`[${this.userId}] Initialization failed:`, error);
+        await this.client.initialize().catch(e => {
+            console.error(`[${this.userId}] Init Error:`, e.message);
             this.status = 'error';
-            // Auto-retry once after 10 seconds if it's an injection error
-            if (error.message.includes('Evaluation failed') || error.message.includes('markedUnread')) {
-                console.log(`[${this.userId}] Retrying initialization in 10s...`);
-                setTimeout(() => this.initialize(), 10000);
-            }
-        }
-    }
-
-    initDb() {
-        this.db.serialize(() => {
-            this.db.run(`CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                chatId TEXT,
-                body TEXT,
-                sender TEXT,
-                receiver TEXT,
-                timestamp INTEGER,
-                fromMe INTEGER,
-                type TEXT,
-                hasMedia INTEGER,
-                fileName TEXT
-            )`);
-            this.db.run(`CREATE TABLE IF NOT EXISTS chats (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                unreadCount INTEGER,
-                timestamp INTEGER,
-                isGroup INTEGER,
-                lastMsgBody TEXT,
-                archived INTEGER,
-                lockedPassword TEXT
-            )`);
-
-            // Migration: Add columns if they don't exist
-            this.db.all('PRAGMA table_info(chats)', (err, rows) => {
-                if (err) return;
-                const columns = rows.map(r => r.name);
-                if (!columns.includes('archived')) {
-                    this.db.run('ALTER TABLE chats ADD COLUMN archived INTEGER DEFAULT 0');
-                }
-                if (!columns.includes('lockedPassword')) {
-                    this.db.run('ALTER TABLE chats ADD COLUMN lockedPassword TEXT');
-                }
-            });
         });
-    }
-
-    async saveMessage(msg) {
-        // Find the actual conversation partner (Remote JID)
-        const chatPartner = msg.fromMe ? msg.to : msg.from;
-
-        return new Promise((resolve) => {
-            this.db.run(`INSERT OR REPLACE INTO messages (id, chatId, body, sender, receiver, timestamp, fromMe, type, hasMedia, fileName) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [msg.id._serialized, chatPartner, msg.body || '', msg.from, msg.to, msg.timestamp, msg.fromMe ? 1 : 0, msg.type, msg.hasMedia ? 1 : 0, msg.fileName || null],
-                (err) => {
-                    if (err) console.error(`[DB Error]`, err);
-                    resolve();
-                }
-            );
-        });
-    }
-
-    async syncHistory() {
-        console.log(`[${this.userId}] Background mode active (Syncing skipped)`);
     }
 
     async sendMessage(to, message, mediaData = null) {
-        if (!this.client || this.status !== 'ready') {
-            throw new Error('Session not ready');
-        }
+        if (!this.client || this.status !== 'ready') throw new Error('Session not ready');
 
-        let chatId = to;
-        if (!chatId.includes('@')) {
-            chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
-        }
+        const chatId = to.includes('@') ? to : `${to.replace(/[^0-9]/g, '')}@c.us`;
 
-        try {
-            let sentMsg;
-            if (mediaData) {
-                const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
-                sentMsg = await this.client.sendMessage(chatId, media, { caption: message });
-            } else {
-                console.log(`[${this.userId}] Sending message to ${chatId}`);
-                sentMsg = await this.client.sendMessage(chatId, message);
-            }
-
-            // If the message was sent, save it to our local DB
-            if (sentMsg) await this.saveMessage(sentMsg);
-            return sentMsg;
-        } catch (e) {
-            console.error(`[${this.userId}] sendMessage FAILED:`, e.message);
-            // The markedUnread error means the message failed to send
-            // DO NOT save fake messages - just report the error
-            throw e;
-        }
-    }
-
-    async getChats() {
-        return new Promise((resolve) => {
-            this.db.all(`SELECT * FROM chats ORDER BY timestamp DESC`, (err, rows) => {
-                if (err) return resolve([]);
-                resolve(rows.map(r => ({
-                    id: r.id,
-                    name: r.name,
-                    unreadCount: r.unreadCount,
-                    timestamp: r.timestamp,
-                    isGroup: !!r.isGroup,
-                    lastMessage: { body: r.lastMsgBody },
-                    archived: !!r.archived,
-                    lockedPassword: r.lockedPassword
-                })));
-            });
-        });
-    }
-
-    async getMessages(chatId, limit = 50) {
-        return new Promise((resolve) => {
-            this.db.all(`SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp DESC LIMIT ?`, [chatId, limit], (err, rows) => {
-                if (err) return resolve([]);
-                resolve(rows.reverse().map(m => ({
-                    id: m.id,
-                    body: m.body,
-                    from: m.sender,
-                    to: m.receiver,
-                    timestamp: m.timestamp,
-                    fromMe: !!m.fromMe,
-                    type: m.type,
-                    hasMedia: !!m.hasMedia,
-                    fileName: m.fileName
-                })));
-            });
-        });
-    }
-
-    async getProfilePicUrl(contactId) {
-        if (!this.client || this.status !== 'ready') return null;
-        try {
-            return await this.client.getProfilePicUrl(contactId);
-        } catch (e) {
-            return null;
-        }
-    }
-
-    async getMedia(messageId) {
-        if (!this.client || this.status !== 'ready') return null;
-        const msg = await this.client.getMessageById(messageId);
-        if (msg && msg.hasMedia) {
-            const media = await msg.downloadMedia();
-            return media; // returns {mimetype, data, filename}
-        }
-        return null;
-    }
-
-    async getProfilePic(contactId) {
-        if (!this.client || this.status !== 'ready') return null;
-        try {
-            const url = await this.client.getProfilePicUrl(contactId);
-            return url;
-        } catch (e) {
-            return null;
+        if (mediaData && mediaData.data) {
+            const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
+            return await this.client.sendMessage(chatId, media, { caption: message });
+        } else {
+            return await this.client.sendMessage(chatId, message);
         }
     }
 
     async disconnect() {
         if (this.client) {
-            console.log(`[${this.userId}] Disconnecting...`);
             await this.client.destroy();
-            this.client = null;
             this.status = 'disconnected';
         }
     }
 }
 
-// Initialize session
 app.post('/api/whatsapp/init', async (req, res) => {
-    const rawUserId = req.body.userId;
-    const userId = getSafeId(rawUserId);
-    console.log(`[API] POST /api/whatsapp/init - userId: ${rawUserId} (safe: ${userId})`);
+    const userId = req.body.userId;
+    const safeId = getSafeId(userId);
+    if (!safeId) return res.status(400).json({ error: 'userId required' });
 
-    if (!userId) {
-        return res.status(400).json({ error: 'userId is required' });
+    if (!sessions[safeId] || sessions[safeId].status === 'disconnected' || sessions[safeId].status === 'error') {
+        sessions[safeId] = new WhatsAppSession(userId);
+        sessions[safeId].initialize();
     }
-
-    // If session exists, check status
-    if (sessions[userId]) {
-        console.log(`[API] Session exists for ${userId}, status: ${sessions[userId].status}`);
-        if (sessions[userId].status === 'ready') {
-            return res.json({ status: 'ready' });
-        }
-
-        // If disconnected or error, clean up and restart
-        if (sessions[userId].status === 'disconnected' || sessions[userId].status === 'error' || sessions[userId].status === 'auth_failure') {
-            console.log(`[API] Session exists but is in ${sessions[userId].status} state, recreating...`);
-            if (sessions[userId].client) {
-                try { await sessions[userId].client.destroy(); } catch (e) { }
-            }
-            delete sessions[userId];
-        } else {
-            // If initializing or qr_ready, just return status
-            return res.json({ status: sessions[userId].status });
-        }
-    }
-
-    // Create new session
-    console.log(`[API] Creating new session for ${userId}`);
-    const session = new WhatsAppSession(userId);
-    sessions[userId] = session;
-
-    // Initialize asynchronously
-    session.initialize().catch(err => console.error(`[API] init error:`, err));
-
-    res.json({ status: 'initializing' });
+    res.json({ status: sessions[safeId].status });
 });
 
-// Get session status
 app.get('/api/whatsapp/status/:userId', (req, res) => {
-    const rawUserId = req.params.userId;
-    const userId = getSafeId(rawUserId);
-
-    if (!sessions[userId]) {
-        // Self-healing: check if file exists on disk
-        const sessionPath = path.join(BASE_AUTH_DIR, `session-${userId}`);
-        if (fs.existsSync(sessionPath)) {
-            console.log(`[API] Session ${userId} found on disk. Auto-initializing...`);
-            const session = new WhatsAppSession(userId); // We'll use the safeId as userId if we don't have the email
-            sessions[userId] = session;
-            session.initialize().catch(err => console.error(`[API] Auto-init failed:`, err));
+    const safeId = getSafeId(req.params.userId);
+    if (!sessions[safeId]) {
+        // Auto-resume if folder exists
+        const sessDir = path.join(BASE_AUTH_DIR, `session-${safeId}`);
+        if (fs.existsSync(sessDir)) {
+            sessions[safeId] = new WhatsAppSession(req.params.userId);
+            sessions[safeId].initialize();
             return res.json({ status: 'initializing' });
         }
         return res.json({ status: 'disconnected' });
     }
-
-    const session = sessions[userId];
-    res.json({
-        status: session.status,
-        qr: session.qrCode
-    });
+    res.json({ status: sessions[safeId].status, qr: sessions[safeId].qrCode });
 });
 
-// Get all chats
-app.get('/api/whatsapp/chats/:userId', async (req, res) => {
-    const userId = getSafeId(req.params.userId);
-    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        const chats = await sessions[userId].getChats();
-        res.json(chats);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get messages for a chat
-app.get('/api/whatsapp/messages/:userId/:chatId', async (req, res) => {
-    const userId = getSafeId(req.params.userId);
-    const { chatId } = req.params;
-    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        const messages = await sessions[userId].getMessages(chatId);
-        res.json(messages);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get media for a message
-app.get('/api/whatsapp/media/:userId/:messageId', async (req, res) => {
-    const userId = getSafeId(req.params.userId);
-    const { messageId } = req.params;
-    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        const media = await sessions[userId].getMedia(messageId);
-        if (media) {
-            res.json(media);
-        } else {
-            res.status(404).json({ error: 'Media not found or message has no media' });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Send message (updated for media)
 app.post('/api/whatsapp/send', async (req, res) => {
-    const { to, message, media } = req.body;
-    const userId = getSafeId(req.body.userId);
+    const { userId, to, message, media } = req.body;
+    const safeId = getSafeId(userId);
 
-    if (!sessions[userId] || sessions[userId].status !== 'ready') {
+    if (!sessions[safeId] || sessions[safeId].status !== 'ready') {
         return res.status(400).json({ error: 'Session not ready' });
     }
 
     try {
-        await sessions[userId].sendMessage(to, message, media);
+        await sessions[safeId].sendMessage(to, message, media);
         res.json({ status: 'success' });
     } catch (error) {
-        console.error(`[API] Failed to send message:`, error);
+        console.error(`[API] Send failed:`, error.message);
         res.status(500).json({ status: 'error', message: error.message });
     }
 });
 
-// Disconnect session
 app.post('/api/whatsapp/disconnect', async (req, res) => {
-    const userId = getSafeId(req.body.userId);
-
-    if (sessions[userId]) {
-        await sessions[userId].disconnect();
-        delete sessions[userId];
-        res.json({ status: 'disconnected' });
-    } else {
-        res.json({ status: 'not_found' });
+    const safeId = getSafeId(req.body.userId);
+    if (sessions[safeId]) {
+        await sessions[safeId].disconnect();
+        delete sessions[safeId];
     }
+    res.json({ status: 'disconnected' });
 });
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-// Get profile picture
-app.get('/api/whatsapp/profile-pic/:userId/:contactId', async (req, res) => {
-    // ... (existing code handles this)
-    const userId = getSafeId(req.params.userId);
-    const { contactId } = req.params;
-    if (!sessions[userId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        const url = await sessions[userId].getProfilePicUrl(contactId);
-        res.json({ url });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Toggle Archive
-app.post('/api/whatsapp/archive', async (req, res) => {
-    const { userId, chatId, archive } = req.body;
-    const safeId = getSafeId(userId);
-    if (!sessions[safeId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        const chat = await sessions[safeId].client.getChatById(chatId);
-        if (archive) await chat.archive();
-        else await chat.unarchive();
-
-        // Update local DB
-        sessions[safeId].db.run(`UPDATE chats SET archived = ? WHERE id = ?`, [archive ? 1 : 0, chatId]);
-        res.json({ status: 'success' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Toggle Lock
-app.post('/api/whatsapp/lock', async (req, res) => {
-    const { userId, chatId, password } = req.body;
-    const safeId = getSafeId(userId);
-    if (!sessions[safeId]) return res.status(404).json({ error: 'No session' });
-
-    try {
-        // Update local DB only (custom feature)
-        sessions[safeId].db.run(`UPDATE chats SET lockedPassword = ? WHERE id = ?`, [password || null, chatId]);
-        res.json({ status: 'success' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Function to resume sessions from disk on startup
-async function resumeSessions() {
-    console.log(`[BOOT] Scanning ${BASE_AUTH_DIR} for sessions...`);
+async function boot() {
     if (!fs.existsSync(BASE_AUTH_DIR)) return;
-
-    const dirs = fs.readdirSync(BASE_AUTH_DIR);
-    console.log(`[BOOT] Found ${dirs.length} items on disk.`);
-
-    for (const dir of dirs) {
-        if (dir.startsWith('session-')) {
-            const safeId = dir.replace('session-', '');
-            console.log(`[BOOT] Resuming session: ${safeId}`);
-
-            // We initialize using the safeId. 
-            // When the user later hits /status with their email, it will map to this safeId.
-            const session = new WhatsAppSession(safeId);
-            sessions[safeId] = session;
-            session.initialize().catch(err => console.error(`[BOOT] Failed to resume ${safeId}:`, err));
+    const items = fs.readdirSync(BASE_AUTH_DIR);
+    for (const item of items) {
+        if (item.startsWith('session-')) {
+            const sid = item.replace('session-', '');
+            // We use sid as userId for resume
+            sessions[sid] = new WhatsAppSession(sid);
+            sessions[sid].initialize();
         }
     }
 }
 
-server.listen(port, '0.0.0.0', () => {
-    console.log(`WhatsApp Gateway running on port ${port} (Real-time with SQLite)`);
-    resumeSessions();
+app.listen(port, '0.0.0.0', () => {
+    console.log(`WhatsApp Gateway running on port ${port}`);
+    boot();
 });

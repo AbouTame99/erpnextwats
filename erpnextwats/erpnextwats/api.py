@@ -4,6 +4,7 @@ import json
 import base64
 from frappe.utils.pdf import get_pdf
 from frappe.utils import get_url
+from erpnext.accounts.utils import get_balance_on
 
 @frappe.whitelist()
 def proxy_to_service(method, path, data=None):
@@ -25,10 +26,27 @@ def proxy_to_service(method, path, data=None):
             
         if response.status_code == 200 and response.text:
             return response.json()
-        else:
-            return {"status": "error", "message": f"Gateway Error {response.status_code}"}
+        return {"status": "error", "message": f"Gateway Error {response.status_code}"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}"}
+
+def get_rendering_context(doc):
+    """Prepares context for Jinja rendering, including customer balance."""
+    ctx = {"doc": doc}
+    
+    # Try to find customer and fetch balance
+    customer_id = getattr(doc, "customer", None)
+    if not customer_id and doc.doctype == "Customer":
+        customer_id = doc.name
+        
+    if customer_id:
+        try:
+            balance = get_balance_on(customer=customer_id)
+            ctx["customer_balance"] = frappe.fmt_money(balance)
+        except:
+            ctx["customer_balance"] = "0.00"
+            
+    return ctx
 
 @frappe.whitelist()
 def get_templates(doctype):
@@ -46,21 +64,20 @@ def send_via_template(docname, doctype, template_id, phone=None):
     # 1. Resolve Recipient Phone
     recipient = phone
     if not recipient:
-        # Try common phone fields
         recipient = (getattr(doc, "mobile_no", None) or 
                      getattr(doc, "phone", None) or 
                      getattr(doc, "contact_mobile", None))
         
-        # If it's a Customer linked doc, try customer record
         if not recipient and getattr(doc, "customer", None):
             cust = frappe.get_doc("Customer", doc.customer)
             recipient = cust.mobile_no or cust.phone
 
     if not recipient:
-        return {"status": "missing_phone", "message": "No phone number found for this document."}
+        return {"status": "missing_phone", "message": "No phone number found."}
 
-    # 2. Render Message (Jinja)
-    message = frappe.render_template(template.message, {"doc": doc})
+    # 2. Render Message (Jinja) with Balance
+    ctx = get_rendering_context(doc)
+    message = frappe.render_template(template.message, ctx)
 
     # 3. Prepare Media
     media = None
@@ -72,12 +89,10 @@ def send_via_template(docname, doctype, template_id, phone=None):
             "filename": f"{docname}.pdf"
         }
     elif template.custom_media:
-        # Handle custom media file
         file_doc = frappe.get_doc("File", {"file_url": template.custom_media})
-        content = file_doc.get_content()
         media = {
             "mimetype": file_doc.content_type or "application/octet-stream",
-            "data": base64.b64encode(content).decode('utf-8'),
+            "data": base64.b64encode(file_doc.get_content()).decode('utf-8'),
             "filename": file_doc.file_name
         }
 
@@ -93,9 +108,10 @@ def send_via_template(docname, doctype, template_id, phone=None):
 
 @frappe.whitelist()
 def render_template_preview(doctype_name, message, docname):
-    """Renders a Jinja message using a reference document."""
+    """Renders a Jinja message using a reference document for preview."""
     try:
         doc = frappe.get_doc(doctype_name, docname)
-        return frappe.render_template(message, {"doc": doc})
+        ctx = get_rendering_context(doc)
+        return frappe.render_template(message, ctx)
     except Exception as e:
         return f"Error rendering preview: {str(e)}"

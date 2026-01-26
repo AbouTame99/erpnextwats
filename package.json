@@ -1,27 +1,19 @@
 {
   "name": "erpnextwats-gateway",
   "version": "1.0.0",
-  "description": "WhatsApp Gateway for ERPNext using Baileys",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/AbouTame99/erpnextwats.git"
-  },
+  "description": "WhatsApp Gateway for ERPNext using whatsapp-web.js",
   "main": "erpnextwats/whatsapp_gateway.js",
   "scripts": {
     "start": "node erpnextwats/whatsapp_gateway.js"
   },
   "dependencies": {
-    "@hapi/boom": "^10.0.1",
-    "express": "^4.18.2",
-    "pino": "^8.16.0",
-    "puppeteer": "^23.0.0",
+    "whatsapp-web.js": "^1.23.0",
     "qrcode": "^1.5.3",
-    "socket.io": "^4.8.3",
-    "sqlite3": "^5.1.7",
-    "whatsapp-web.js": "^1.34.4"
+    "express": "^4.18.2"
   },
   "engines": {
     "node": ">=18.0.0"
   }
 }
+
+
