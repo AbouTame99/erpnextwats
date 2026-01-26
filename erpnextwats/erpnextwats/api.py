@@ -31,16 +31,22 @@ def proxy_to_service(method, path, data=None):
         return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}"}
 
 def get_rendering_context(doc):
-    """Prepares context for Jinja rendering, including exact custom balance logic."""
+    """Prepares context for Jinja rendering, including robust custom balance logic."""
     ctx = {"doc": doc, "customer_balance": "0.00"}
     
-    # Try to find customer
-    party = getattr(doc, "customer", None)
-    if not party and doc.doctype == "Customer":
+    # 1. Robust Party Detection
+    party = (getattr(doc, "customer", None) or 
+             getattr(doc, "supplier", None) or 
+             getattr(doc, "party", None))
+             
+    if not party and doc.doctype in ["Customer", "Supplier"]:
         party = doc.name
         
+    frappe.logger().debug(f"[WhatsApp] Rendering Context - Doc: {doc.doctype} {doc.name}, Party: {party}")
+        
     if party:
-        company = "Jiex Trading"
+        # Use document's company if available, fallback to default
+        company = getattr(doc, "company", None) or "Jiex Trading"
         try:
             # 1. Fetch RAW GL Entries with Date Range
             filters = {
@@ -56,6 +62,8 @@ def get_rendering_context(doc):
                 order_by="posting_date asc",
                 ignore_permissions=True 
             )
+            
+            frappe.logger().debug(f"[WhatsApp] GL Entries found: {len(raw_data)} for Company: {company}")
             
             # 2. Group by Voucher
             net_data_map = {}
@@ -91,9 +99,10 @@ def get_rendering_context(doc):
                 current_balance += (final_d - final_c)
             
             ctx["customer_balance"] = frappe.fmt_money(current_balance)
+            frappe.logger().debug(f"[WhatsApp] Final Balance calculated: {current_balance}")
                 
         except Exception as e:
-            frappe.log_error(title="WhatsApp Balance Calc Error", message=str(e))
+            frappe.log_error(title="WhatsApp Balance Calc Error", message=f"Doc: {doc.name}, Error: {str(e)}")
             
     return ctx
 
