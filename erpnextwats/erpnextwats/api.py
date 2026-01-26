@@ -98,7 +98,8 @@ def get_rendering_context(doc):
                     
                 current_balance += (final_d - final_c)
             
-            ctx["customer_balance"] = frappe.fmt_money(current_balance)
+            from frappe.utils import fmt_money
+            ctx["customer_balance"] = fmt_money(current_balance, currency=doc.get("currency") or "MAD")
             frappe.logger().debug(f"[WhatsApp] Final Balance calculated: {current_balance}")
                 
         except Exception as e:
