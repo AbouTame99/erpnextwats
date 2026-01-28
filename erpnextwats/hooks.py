@@ -25,7 +25,7 @@ add_to_apps_screen = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/erpnextwats/css/erpnextwats.css"
-# app_include_js = "/assets/erpnextwats/js/erpnextwats.js"
+app_include_js = "/assets/erpnextwats/js/whatsapp_integration.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/erpnextwats/css/erpnextwats.css"
@@ -43,10 +43,7 @@ add_to_apps_screen = [
 
 # include js in doctype views
 doctype_js = {
-    "Sales Invoice" : "public/js/whatsapp_integration.js",
-    "Purchase Invoice" : "public/js/whatsapp_integration.js",
-    "Sales Order" : "public/js/whatsapp_integration.js",
-    "Purchase Order" : "public/js/whatsapp_integration.js"
+    # Buttons are now added dynamically via app_include_js
 }
 doctype_list_js = {
     "Item": "public/js/item_list.js"

@@ -166,6 +166,12 @@ def send_via_template(docname, doctype, template_id, phone=None):
     return proxy_to_service("POST", "api/whatsapp/send", data)
 
 @frappe.whitelist()
+def get_template_doctypes():
+    """Returns a list of DocTypes that have at least one WhatsApp Template."""
+    templates = frappe.get_all("WhatsApp Template", fields=["doctype_name"], distinct=1)
+    return [t.doctype_name for t in templates]
+
+@frappe.whitelist()
 def search_items_by_barcode(search_str):
     """Searches for items by barcode (partial match) and returns a list of item codes."""
     if not search_str:
