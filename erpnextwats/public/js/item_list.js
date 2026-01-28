@@ -1,28 +1,27 @@
 frappe.listview_settings['Item'] = {
     onload: function (listview) {
-        // Create a custom container for our barcode search to avoid interference with Frappe's filter logic
+        // Remove existing barcode search to prevent duplicates on navigation/refresh
+        $('.barcode-search-container').remove();
+
         const $custom_search = $(`
-            <div class="barcode-search-container" style="display: inline-block; margin-right: 10px;">
+            <div class="barcode-search-container" style="display: inline-block; margin-right: 12px; vertical-align: middle;">
                 <input type="text" class="form-control barcode-search-input" 
-                    placeholder="${__('Scan Barcode...')}" 
-                    style="width: 220px; background-color: var(--control-bg); height: 30px; font-size: 13px;">
+                    placeholder="${__('Barcode Search...')}" 
+                    style="width: 200px; background-color: var(--control-bg); height: 30px; font-size: 13px; border: 1px solid var(--border-color); border-radius: 4px; padding: 0 10px;">
             </div>
         `);
 
-        // Insert it before the primary button in the header
-        listview.page.set_secondary_action(function () {
-            // Keep existing logic if any, but we want our input early
-        });
-
-        // Find the place to inject - usually next to the filters or in the inner toolbar
-        $custom_search.prependTo(listview.page.get_inner_group_button().parent());
+        // Inject into the page actions area (top right)
+        if (listview.page && listview.page.page_actions) {
+            $custom_search.prependTo(listview.page.page_actions);
+        }
 
         const $input = $custom_search.find('.barcode-search-input');
 
         $input.on('change', function () {
             let val = $(this).val();
 
-            // Clear existing custom 'name' filter if it exists
+            // Clear any existing barcode filter on 'name'
             listview.filter_area.remove('name');
 
             if (val) {
@@ -32,10 +31,10 @@ frappe.listview_settings['Item'] = {
                     callback: function (r) {
                         let item_codes = r.message || [];
                         if (item_codes.length > 0) {
-                            // Apply filter to show matching items
+                            // Apply filter
                             listview.filter_area.add(listview.doctype, 'name', 'in', item_codes);
                         } else {
-                            // Show nothing if no match
+                            // Apply filter that returns nothing
                             listview.filter_area.add(listview.doctype, 'name', '=', '_NOT_FOUND_');
                         }
                     }
@@ -45,9 +44,11 @@ frappe.listview_settings['Item'] = {
             }
         });
 
-        // Auto-focus after a short delay
+        // Focus the input
         setTimeout(() => {
-            $input.focus();
-        }, 1000);
+            if ($input.is(':visible')) {
+                $input.focus();
+            }
+        }, 800);
     }
 };
