@@ -11,13 +11,11 @@ frappe.listview_settings['Item'] = {
             </div>
         `);
 
-        // Target the filter area or search area
-        // We try to prepend it to the filter section for proximity to basic filters
+        // Target the filter area
         const $filter_area = listview.$page.find('.list-filters');
         if ($filter_area.length) {
             $custom_search.prependTo($filter_area);
         } else {
-            // Fallback to the top filtering row if .list-filters is not found
             const $filter_section = listview.$page.find('.filter-section');
             if ($filter_section.length) {
                 $custom_search.prependTo($filter_section);
@@ -29,7 +27,7 @@ frappe.listview_settings['Item'] = {
         $input.on('change', function () {
             let val = $(this).val();
 
-            // Clear existing 'name' filter if set by barcode
+            // Clear existing 'name' filter
             listview.filter_area.remove('name');
 
             if (val) {
@@ -40,6 +38,23 @@ frappe.listview_settings['Item'] = {
                         let item_codes = r.message || [];
                         if (item_codes.length > 0) {
                             listview.filter_area.add(listview.doctype, 'name', 'in', item_codes);
+
+                            // --- FUNNY POPUP START ---
+                            // Display the "Rani Ba4i sandwich kefta" popup
+                            frappe.msgprint({
+                                title: __('Funny Alert!'),
+                                message: `
+                                    <div style="text-align: center;">
+                                        <h3 style="color: #d9534f; margin-bottom: 15px;">Rani Ba4i sandwich kefta</h3>
+                                        <div style="width: 100%; max-height: 300px; overflow: hidden; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+                                            <img src="YOUR_IMAGE_LINK_HERE" style="width: 100%; height: auto; display: block;">
+                                        </div>
+                                    </div>
+                                `,
+                                indicator: 'red'
+                            });
+                            // --- FUNNY POPUP END ---
+
                         } else {
                             listview.filter_area.add(listview.doctype, 'name', '=', '_NOT_FOUND_');
                         }
