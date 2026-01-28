@@ -165,50 +165,29 @@ def send_via_template(docname, doctype, template_id, phone=None):
 
     return proxy_to_service("POST", "api/whatsapp/send", data)
 
-@frappe.whitelist(allow_guest=True)
-def gateway_webhook(data, secret=None):
-    """Internal endpoint for WhatsApp gateway to process incoming messages."""
-    # Simple security check (could be improved)
-    if secret != "INTERNAL_GATEWAY_SECRET":
-        return {"status": "error", "message": "Unauthorized"}
+@frappe.whitelist()
+def search_items_by_barcode(search_str):
+    """Searches for items by barcode (partial match) and returns a list of item codes."""
+    if not search_str:
+        return []
         
-    if isinstance(data, str):
-        data = json.loads(data)
-        
-    msg_body = data.get("body", "").strip()
-    from_me = data.get("fromMe", False)
+    # 1. Search in Item Barcode (child table)
+    items = frappe.get_all("Item Barcode", 
+        filters={"barcode": ["like", f"%{search_str}%"]}, 
+        fields=["parent"],
+        ignore_permissions=True
+    )
+    item_codes = [d.parent for d in items]
     
-    if from_me:
-        return {"status": "ignored"}
-
-    # Barcode Search Logic
-    # Check if it looks like a barcode (alphanumeric, 5-15 chars)
-    if msg_body and 5 <= len(msg_body) <= 20:
-        # Search in Item Barcode child table
-        item_code = frappe.db.get_value("Item Barcode", {"barcode": msg_body}, "parent")
+    # 2. Search in Item master field
+    main_items = frappe.get_all("Item", 
+        filters={"barcode": ["like", f"%{search_str}%"]}, 
+        fields=["name"],
+        ignore_permissions=True
+    )
+    item_codes.extend([d.name for d in main_items])
         
-        # Fallback to Item field
-        if not item_code:
-            item_code = frappe.db.get_value("Item", {"barcode": msg_body}, "name")
-            
-        if item_code:
-            item = frappe.get_cached_doc("Item", item_code)
-            
-            # Get Price (Standard Selling)
-            price = frappe.db.get_value("Item Price", {"item_code": item_code, "price_list": "Standard Selling"}, "price_list_rate")
-            
-            # Get Stock
-            stock = frappe.db.get_value("Bin", {"item_code": item_code}, "actual_qty") or 0
-            
-            reply = f"*Item Found:*\n"
-            reply += f"Name: {item.item_name}\n"
-            reply += f"Description: {item.description or 'N/A'}\n"
-            reply += f"Price: {frappe.fmt_money(price or 0, currency='MAD')}\n"
-            reply += f"Stock: {stock} units"
-            
-            return {"status": "reply", "message": reply}
-
-    return {"status": "no_match"}
+    return list(set(item_codes))
 
 @frappe.whitelist()
 def render_template_preview(doctype_name, message, docname):

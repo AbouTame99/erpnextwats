@@ -72,40 +72,6 @@ class WhatsAppSession {
             delete sessions[this.safeId];
         });
 
-        this.client.on('message', async (msg) => {
-            console.log(`[${this.userId}] Incoming: ${msg.body} from ${msg.from}`);
-
-            // Call ERPNext webhook
-            try {
-                // We use localhost since they are on the same server
-                // We need to know the port. Defaulting to 8000 or 80.
-                // For production, it might be 80.
-                const erpnextUrl = 'http://127.0.0.1:8000'; // Bench default
-
-                const response = await fetch(`${erpnextUrl}/api/method/erpnextwats.erpnextwats.api.gateway_webhook`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        secret: "INTERNAL_GATEWAY_SECRET",
-                        data: {
-                            body: msg.body,
-                            from: msg.from,
-                            fromMe: msg.fromMe
-                        }
-                    })
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.message && result.message.status === 'reply') {
-                        await this.client.sendMessage(msg.from, result.message.message);
-                    }
-                }
-            } catch (error) {
-                console.error(`[${this.userId}] Webhook failed:`, error.message);
-            }
-        });
-
         await this.client.initialize().catch(e => {
             console.error(`[${this.userId}] Init Error:`, e.message);
             this.status = 'error';
