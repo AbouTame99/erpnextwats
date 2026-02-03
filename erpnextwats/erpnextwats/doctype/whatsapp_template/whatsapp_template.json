@@ -18,10 +18,21 @@
         "custom_media",
         "auto_send_section",
         "enable_auto_send",
-        "auto_send_timing",
-        "auto_send_delay",
-        "auto_send_status",
-        "auto_send_conditions"
+        "auto_send_mode",
+        "column_break_1",
+        "auto_send_frequency",
+        "selected_customers_section",
+        "selected_customers",
+        "conditions_section",
+        "visual_conditions",
+        "preview_conditions_btn",
+        "matching_docs_preview",
+        "anti_ban_section",
+        "hourly_limit",
+        "daily_limit",
+        "column_break_2",
+        "cooldown_hours",
+        "max_per_customer"
     ],
     "fields": [
         {
@@ -95,40 +106,94 @@
         },
         {
             "depends_on": "enable_auto_send",
-            "fieldname": "auto_send_timing",
+            "fieldname": "auto_send_mode",
             "fieldtype": "Select",
-            "label": "Send Timing",
-            "options": "Immediate\nAfter Minutes\nAfter Hours\nAfter Days\nOn Status Change\nEvery Minute\nEvery Hour\nEvery Day\nEvery Week\nEvery Month",
-            "reqd": 1
+            "label": "Send Mode",
+            "options": "\nRecurring\nOn Document Create",
+            "description": "Recurring = Send periodically to selected customers. On Document Create = Send when new document is created."
         },
         {
-            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_timing == 'After Minutes' || doc.auto_send_timing == 'After Hours' || doc.auto_send_timing == 'After Days')",
-            "fieldname": "auto_send_delay",
+            "fieldname": "column_break_1",
+            "fieldtype": "Column Break"
+        },
+        {
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Recurring'",
+            "fieldname": "auto_send_frequency",
+            "fieldtype": "Select",
+            "label": "Frequency",
+            "options": "Weekly\nMonthly",
+            "description": "How often to send to selected customers"
+        },
+        {
+            "fieldname": "selected_customers_section",
+            "fieldtype": "Section Break",
+            "label": "Selected Customers",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Recurring'"
+        },
+        {
+            "fieldname": "selected_customers",
+            "fieldtype": "Table",
+            "label": "Customers to Send To",
+            "options": "WhatsApp Template Customer",
+            "description": "Select customers who will receive this message automatically"
+        },
+        {
+            "fieldname": "conditions_section",
+            "fieldtype": "Section Break",
+            "label": "When to Send (Conditions)",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'On Document Create'"
+        },
+        {
+            "fieldname": "visual_conditions",
+            "fieldtype": "JSON",
+            "label": "Conditions",
+            "description": "Define when to send (e.g., when Invoice amount > 1000)"
+        },
+        {
+            "fieldname": "preview_conditions_btn",
+            "fieldtype": "Button",
+            "label": "Preview Matching Documents"
+        },
+        {
+            "fieldname": "matching_docs_preview",
+            "fieldtype": "HTML",
+            "label": "Matching Documents"
+        },
+        {
+            "fieldname": "anti_ban_section",
+            "fieldtype": "Section Break",
+            "label": "Anti-Ban Protection"
+        },
+        {
+            "default": "50",
+            "fieldname": "hourly_limit",
             "fieldtype": "Int",
-            "label": "Delay Amount",
-            "description": "Number of minutes/hours/days to wait before sending"
+            "label": "Hourly Limit",
+            "description": "Maximum messages per hour"
         },
         {
-            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_timing == 'On Status Change'",
-            "fieldname": "auto_send_status",
-            "fieldtype": "Select",
-            "label": "Trigger Status",
-            "options": "Submitted\nPaid\nUnpaid\nOverdue\nDraft\nCancelled",
-            "description": "Document status that triggers sending"
+            "default": "500",
+            "fieldname": "daily_limit",
+            "fieldtype": "Int",
+            "label": "Daily Limit"
         },
         {
-            "depends_on": "enable_auto_send",
-            "fieldname": "auto_send_conditions",
-            "fieldtype": "Small Text",
-            "label": "Additional Conditions",
-            "description": "JSON conditions: {\"is_paid\": true, \"outstanding_amount\": \"= 0\", \"grand_total\": \"> 1000\"}"
+            "fieldname": "column_break_2",
+            "fieldtype": "Column Break"
         },
         {
-            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_timing == 'Every Minute' || doc.auto_send_timing == 'Every Hour' || doc.auto_send_timing == 'Every Day' || doc.auto_send_timing == 'Every Week' || doc.auto_send_timing == 'Every Month')",
-            "fieldname": "recurring_send_time",
-            "fieldtype": "Time",
-            "label": "Send Time",
-            "description": "Time of day to send (for Daily/Weekly/Monthly)"
+            "default": "24",
+            "fieldname": "cooldown_hours",
+            "fieldtype": "Int",
+            "label": "Cooldown (Hours)",
+            "description": "Minimum hours between sends to same customer"
+        },
+        {
+            "default": "5",
+            "fieldname": "max_per_customer",
+            "fieldtype": "Int",
+            "label": "Max Per Customer/Day",
+            "description": "Maximum messages per customer per day"
         }
     ],
     "index_web_pages_for_search": 1,

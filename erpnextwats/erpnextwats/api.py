@@ -1502,3 +1502,503 @@ def process_recurring_template(template):
                 pass
     except:
         pass
+# ===== ENHANCED AUTO-SEND WITH CUSTOMER SELECTION =====
+
+def process_recurring_to_selected_customers(template_name):
+    """
+    Process recurring auto-send to manually selected customers.
+    Runs via scheduler (weekly/monthly).
+    """
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        
+        if not template.enable_auto_send or template.auto_send_mode != "Recurring":
+            return
+        
+        # Get selected customers
+        selected_customers = template.selected_customers or []
+        if not selected_customers:
+            frappe.logger().info(f"[AUTO-SEND] No customers selected for template {template_name}")
+            return
+        
+        frappe.logger().info(f"[AUTO-SEND] Processing {template_name} for {len(selected_customers)} customers")
+        
+        # Track counts for anti-ban
+        sent_count = 0
+        failed_count = 0
+        
+        # Process each selected customer with anti-ban delays
+        for idx, customer_row in enumerate(selected_customers):
+            try:
+                customer = frappe.get_doc("Customer", customer_row.customer)
+                phone = validate_phone_medium(customer.mobile_no or customer.phone)
+                
+                if not phone:
+                    frappe.logger().warning(f"[AUTO-SEND] No valid phone for customer {customer.name}")
+                    failed_count += 1
+                    continue
+                
+                # Check customer cooldown
+                if not check_customer_cooldown(customer.name, template.name, template.cooldown_hours):
+                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} in cooldown, skipping")
+                    continue
+                
+                # Check per-customer daily limit
+                if not check_customer_daily_limit(customer.name, template.name, template.max_per_customer):
+                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} daily limit reached")
+                    continue
+                
+                # Render message with customer context
+                message = frappe.render_template(template.message, {"doc": customer})
+                
+                # Send with retry logic
+                success = False
+                for attempt in range(1, 4):  # 3 attempts
+                    try:
+                        result = send_message_direct(phone, message, template)
+                        
+                        if result.get("status") == "success":
+                            log_auto_send(template.name, customer.name, "Sent", None)
+                            success = True
+                            sent_count += 1
+                            break
+                        else:
+                            error = result.get("message", "Unknown error")
+                            frappe.logger().warning(f"[AUTO-SEND] Attempt {attempt} failed for {customer.name}: {error}")
+                            
+                            if attempt < 3:
+                                delay = smart_delay(sent_count, failed_count)
+                                time.sleep(delay)
+                    
+                    except Exception as e:
+                        frappe.logger().error(f"[AUTO-SEND] Exception attempt {attempt} for {customer.name}: {str(e)}")
+                        if attempt < 3:
+                            delay = smart_delay(sent_count, failed_count)
+                            time.sleep(delay)
+                
+                if not success:
+                    log_auto_send(template.name, customer.name, "Failed", "Failed after 3 attempts")
+                    failed_count += 1
+                
+                # Smart delay before next customer (anti-ban)
+                if idx < len(selected_customers) - 1:
+                    delay = smart_delay(sent_count, failed_count)
+                    frappe.logger().info(f"[AUTO-SEND] Waiting {delay}s before next customer...")
+                    time.sleep(delay)
+                    
+            except Exception as e:
+                frappe.logger().error(f"[AUTO-SEND] Error processing customer {customer_row.customer}: {str(e)}")
+                failed_count += 1
+                continue
+        
+        frappe.logger().info(f"[AUTO-SEND] Completed {template_name}: {sent_count} sent, {failed_count} failed")
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_recurring_to_selected_customers: {str(e)}")
+
+
+def process_weekly_recurring():
+    """Process all weekly recurring templates. Runs every week."""
+    try:
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Recurring",
+                "auto_send_frequency": "Weekly"
+            },
+            fields=["name"]
+        )
+        
+        for template_data in templates:
+            frappe.enqueue(
+                'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
+                template_name=template_data.name,
+                queue='long',
+                timeout=7200
+            )
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_weekly_recurring: {str(e)}")
+
+
+def process_monthly_recurring_enhanced():
+    """Process all monthly recurring templates. Runs every month."""
+    try:
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Recurring",
+                "auto_send_frequency": "Monthly"
+            },
+            fields=["name"]
+        )
+        
+        for template_data in templates:
+            frappe.enqueue(
+                'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
+                template_name=template_data.name,
+                queue='long',
+                timeout=7200
+            )
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_monthly_recurring_enhanced: {str(e)}")
+
+
+def check_customer_cooldown(customer, template_name, cooldown_hours):
+    """Check if customer is in cooldown period for this template."""
+    try:
+        if not cooldown_hours:
+            return True
+        
+        from frappe.utils import add_to_date, now_datetime
+        
+        # Find last sent time
+        last_sent = frappe.db.get_value("WhatsApp Bulk History",
+            {
+                "template": template_name,
+                "status": ["in", ["Processing", "Completed"]]
+            },
+            "completed_at",
+            order_by="completed_at desc"
+        )
+        
+        if not last_sent:
+            return True
+        
+        # Check if cooldown passed
+        next_allowed = add_to_date(last_sent, hours=cooldown_hours)
+        return now_datetime() >= next_allowed
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error checking cooldown: {str(e)}")
+        return True
+
+
+def check_customer_daily_limit(customer, template_name, max_per_day):
+    """Check if customer has exceeded daily limit."""
+    try:
+        if not max_per_day:
+            return True
+        
+        today = now_datetime().date()
+        
+        # Count sends today
+        sent_today = frappe.db.count("WhatsApp Bulk History",
+            {
+                "template": template_name,
+                "status": ["in", ["Processing", "Completed"]],
+                "creation": ["between", [f"{today} 00:00:00", f"{today} 23:59:59"]]
+            }
+        )
+        
+        return sent_today < max_per_day
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error checking daily limit: {str(e)}")
+        return True
+
+
+def send_message_direct(phone, message, template):
+    """Send WhatsApp message directly without document."""
+    try:
+        # Use the existing send_via_template logic but with direct message
+        data = {
+            "userId": frappe.session.user,
+            "to": phone,
+            "message": message,
+            "media"
+
+
+# ===== ENHANCED AUTO-SEND WITH CUSTOMER SELECTION =====
+
+def process_recurring_to_selected_customers(template_name):
+    """
+    Process recurring auto-send to manually selected customers.
+    Runs via scheduler (weekly/monthly).
+    """
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        
+        if not template.enable_auto_send or template.auto_send_mode != "Recurring":
+            return
+        
+        # Get selected customers
+        selected_customers = template.selected_customers or []
+        if not selected_customers:
+            frappe.logger().info(f"[AUTO-SEND] No customers selected for template {template_name}")
+            return
+        
+        frappe.logger().info(f"[AUTO-SEND] Processing {template_name} for {len(selected_customers)} customers")
+        
+        # Track counts for anti-ban
+        sent_count = 0
+        failed_count = 0
+        
+        # Process each selected customer with anti-ban delays
+        for idx, customer_row in enumerate(selected_customers):
+            try:
+                customer = frappe.get_doc("Customer", customer_row.customer)
+                phone = validate_phone_medium(customer.mobile_no or customer.phone)
+                
+                if not phone:
+                    frappe.logger().warning(f"[AUTO-SEND] No valid phone for customer {customer.name}")
+                    failed_count += 1
+                    continue
+                
+                # Check customer cooldown
+                if not check_customer_cooldown(customer.name, template.name, template.cooldown_hours):
+                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} in cooldown, skipping")
+                    continue
+                
+                # Check per-customer daily limit
+                if not check_customer_daily_limit(customer.name, template.name, template.max_per_customer):
+                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} daily limit reached")
+                    continue
+                
+                # Render message with customer context
+                message = frappe.render_template(template.message, {"doc": customer})
+                
+                # Send with retry logic
+                success = False
+                for attempt in range(1, 4):  # 3 attempts
+                    try:
+                        result = send_message_direct(phone, message, template)
+                        
+                        if result.get("status") == "success":
+                            log_auto_send(template.name, customer.name, "Sent", None)
+                            success = True
+                            sent_count += 1
+                            break
+                        else:
+                            error = result.get("message", "Unknown error")
+                            frappe.logger().warning(f"[AUTO-SEND] Attempt {attempt} failed for {customer.name}: {error}")
+                            
+                            if attempt < 3:
+                                delay = smart_delay(sent_count, failed_count)
+                                time.sleep(delay)
+                    
+                    except Exception as e:
+                        frappe.logger().error(f"[AUTO-SEND] Exception attempt {attempt} for {customer.name}: {str(e)}")
+                        if attempt < 3:
+                            delay = smart_delay(sent_count, failed_count)
+                            time.sleep(delay)
+                
+                if not success:
+                    log_auto_send(template.name, customer.name, "Failed", "Failed after 3 attempts")
+                    failed_count += 1
+                
+                # Smart delay before next customer (anti-ban)
+                if idx < len(selected_customers) - 1:
+                    delay = smart_delay(sent_count, failed_count)
+                    frappe.logger().info(f"[AUTO-SEND] Waiting {delay}s before next customer...")
+                    time.sleep(delay)
+                    
+            except Exception as e:
+                frappe.logger().error(f"[AUTO-SEND] Error processing customer {customer_row.customer}: {str(e)}")
+                failed_count += 1
+                continue
+        
+        frappe.logger().info(f"[AUTO-SEND] Completed {template_name}: {sent_count} sent, {failed_count} failed")
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_recurring_to_selected_customers: {str(e)}")
+
+
+def process_weekly_recurring():
+    """Process all weekly recurring templates. Runs every week."""
+    try:
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Recurring",
+                "auto_send_frequency": "Weekly"
+            },
+            fields=["name"]
+        )
+        
+        for template_data in templates:
+            frappe.enqueue(
+                'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
+                template_name=template_data.name,
+                queue='long',
+                timeout=7200
+            )
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_weekly_recurring: {str(e)}")
+
+
+def process_monthly_recurring_enhanced():
+    """Process all monthly recurring templates. Runs every month."""
+    try:
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Recurring",
+                "auto_send_frequency": "Monthly"
+            },
+            fields=["name"]
+        )
+        
+        for template_data in templates:
+            frappe.enqueue(
+                'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
+                template_name=template_data.name,
+                queue='long',
+                timeout=7200
+            )
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error in process_monthly_recurring_enhanced: {str(e)}")
+
+
+def check_customer_cooldown(customer, template_name, cooldown_hours):
+    """Check if customer is in cooldown period for this template."""
+    try:
+        if not cooldown_hours:
+            return True
+        
+        from frappe.utils import add_to_date, now_datetime
+        
+        # Find last sent time
+        last_sent = frappe.db.get_value("WhatsApp Bulk History",
+            {
+                "template": template_name,
+                "status": ["in", ["Processing", "Completed"]]
+            },
+            "completed_at",
+            order_by="completed_at desc"
+        )
+        
+        if not last_sent:
+            return True
+        
+        # Check if cooldown passed
+        next_allowed = add_to_date(last_sent, hours=cooldown_hours)
+        return now_datetime() >= next_allowed
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error checking cooldown: {str(e)}")
+        return True
+
+
+def check_customer_daily_limit(customer, template_name, max_per_day):
+    """Check if customer has exceeded daily limit."""
+    try:
+        if not max_per_day:
+            return True
+        
+        today = now_datetime().date()
+        
+        # Count sends today
+        sent_today = frappe.db.count("WhatsApp Bulk History",
+            {
+                "template": template_name,
+                "status": ["in", ["Processing", "Completed"]],
+                "creation": ["between", [f"{today} 00:00:00", f"{today} 23:59:59"]]
+            }
+        )
+        
+        return sent_today < max_per_day
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error checking daily limit: {str(e)}")
+        return True
+
+
+def send_message_direct(phone, message, template):
+    """Send WhatsApp message directly without document."""
+    try:
+        # Use the existing send_via_template logic but with direct message
+        data = {
+            "userId": frappe.session.user,
+            "to": phone,
+            "message": message,
+            "media": None
+        }
+        
+        result = proxy_to_service("POST", "api/whatsapp/send", data)
+        return result
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def log_auto_send(template_name, customer, status, error):
+    """Log auto-send attempt."""
+    try:
+        frappe.logger().info(f"[AUTO-SEND] {template_name} -> {customer}: {status}")
+        if error:
+            frappe.logger().error(f"[AUTO-SEND] Error: {error}")
+    except:
+        pass
+
+
+@frappe.whitelist()
+def preview_matching_documents(template_name, conditions_json):
+    """
+    Preview which documents match the visual conditions.
+    Returns list of matching documents for user review.
+    """
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        doctype = template.doctype_name
+        
+        if not conditions_json:
+            # Return first 10 documents of this type
+            docs = frappe.get_all(doctype, fields=["name"], limit=10)
+            return {"status": "success", "count": len(docs), "documents": [d.name for d in docs]}
+        
+        # Parse visual conditions
+        conditions = json.loads(conditions_json)
+        
+        # Build frappe filters from visual conditions
+        filters = build_filters_from_visual_conditions(conditions)
+        
+        # Get matching documents
+        docs = frappe.get_all(doctype, filters=filters, fields=["name"], limit=50)
+        
+        return {
+            "status": "success",
+            "count": len(docs),
+            "documents": [d.name for d in docs],
+            "filters_applied": filters
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def build_filters_from_visual_conditions(conditions):
+    """Convert visual builder conditions to frappe filters."""
+    try:
+        filters = {}
+        
+        if not conditions or not isinstance(conditions, dict):
+            return filters
+        
+        rules = conditions.get("rules", [])
+        operator = conditions.get("operator", "AND")
+        
+        for rule in rules:
+            if isinstance(rule, dict):
+                field = rule.get("field")
+                op = rule.get("operator", "=")
+                value = rule.get("value")
+                
+                if field and value is not None:
+                    if op == "=":
+                        filters[field] = value
+                    elif op == ">":
+                        filters[field] = [">", value]
+                    elif op == "<":
+                        filters[field] = ["<", value]
+                    elif op == ">=":
+                        filters[field] = [">=", value]
+                    elif op == "<=":
+                        filters[field] = ["<=", value]
+                    elif op == "!=":
+                        filters[field] = ["!=", value]
+        
+        return filters
+        
+    except Exception as e:
+        frappe.logger().error(f"[AUTO-SEND] Error building filters: {str(e)}")
+        return {}

@@ -45,7 +45,7 @@ page_js = {
 
 # include js in doctype views
 doctype_js = {
-    # Buttons are now added dynamically via app_include_js
+    "WhatsApp Template": "public/js/whatsapp_template.js"
 }
 doctype_list_js = {
     "Item": "public/js/item_list.js"
@@ -162,8 +162,12 @@ scheduler_events = {
 	"daily": [
 		"erpnextwats.erpnextwats.api.process_daily_recurring"
 	],
+	"weekly": [
+		"erpnextwats.erpnextwats.api.process_weekly_recurring"
+	],
 	"monthly": [
-		"erpnextwats.erpnextwats.api.process_monthly_recurring"
+		"erpnextwats.erpnextwats.api.process_monthly_recurring",
+		"erpnextwats.erpnextwats.api.process_monthly_recurring_enhanced"
 	]
 }
 
