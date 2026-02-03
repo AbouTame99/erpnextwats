@@ -1,0 +1,158 @@
+{
+    "actions": [],
+    "allow_rename": 1,
+    "creation": "2024-01-25 00:00:00.000000",
+    "doctype": "DocType",
+    "editable_grid": 1,
+    "engine": "InnoDB",
+    "field_order": [
+        "template_name",
+        "doctype_name",
+        "message_section",
+        "message",
+        "preview_section",
+        "preview_doc",
+        "preview_html",
+        "attachment_section",
+        "attach_pdf",
+        "custom_media",
+        "auto_send_section",
+        "enable_auto_send",
+        "auto_send_timing",
+        "auto_send_delay",
+        "auto_send_status",
+        "auto_send_conditions"
+    ],
+    "fields": [
+        {
+            "fieldname": "template_name",
+            "fieldtype": "Data",
+            "label": "Template Name",
+            "reqd": 1,
+            "unique": 1
+        },
+        {
+            "fieldname": "doctype_name",
+            "fieldtype": "Link",
+            "label": "Source DocType",
+            "options": "DocType",
+            "reqd": 1
+        },
+        {
+            "fieldname": "message_section",
+            "fieldtype": "Section Break",
+            "label": "Message Content"
+        },
+        {
+            "description": "You can use Jinja variables like {{ doc.customer_name }}",
+            "fieldname": "message",
+            "fieldtype": "Small Text",
+            "label": "Message",
+            "reqd": 1
+        },
+        {
+            "fieldname": "preview_section",
+            "fieldtype": "Section Break",
+            "label": "Live Preview"
+        },
+        {
+            "fieldname": "preview_doc",
+            "fieldtype": "Dynamic Link",
+            "label": "Reference Document",
+            "options": "doctype_name"
+        },
+        {
+            "fieldname": "preview_html",
+            "fieldtype": "HTML",
+            "label": "Rendered Preview"
+        },
+        {
+            "fieldname": "attachment_section",
+            "fieldtype": "Section Break",
+            "label": "Attachments"
+        },
+        {
+            "default": "0",
+            "fieldname": "attach_pdf",
+            "fieldtype": "Check",
+            "label": "Attach Document PDF"
+        },
+        {
+            "fieldname": "custom_media",
+            "fieldtype": "Attach",
+            "label": "Custom Media/Image"
+        },
+        {
+            "fieldname": "auto_send_section",
+            "fieldtype": "Section Break",
+            "label": "Auto Send Settings"
+        },
+        {
+            "default": "0",
+            "fieldname": "enable_auto_send",
+            "fieldtype": "Check",
+            "label": "Enable Auto Send"
+        },
+        {
+            "depends_on": "enable_auto_send",
+            "fieldname": "auto_send_timing",
+            "fieldtype": "Select",
+            "label": "Send Timing",
+            "options": "Immediate\nAfter Minutes\nAfter Hours\nAfter Days\nOn Status Change\nEvery Minute\nEvery Hour\nEvery Day\nEvery Week\nEvery Month",
+            "reqd": 1
+        },
+        {
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_timing == 'After Minutes' || doc.auto_send_timing == 'After Hours' || doc.auto_send_timing == 'After Days')",
+            "fieldname": "auto_send_delay",
+            "fieldtype": "Int",
+            "label": "Delay Amount",
+            "description": "Number of minutes/hours/days to wait before sending"
+        },
+        {
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_timing == 'On Status Change'",
+            "fieldname": "auto_send_status",
+            "fieldtype": "Select",
+            "label": "Trigger Status",
+            "options": "Submitted\nPaid\nUnpaid\nOverdue\nDraft\nCancelled",
+            "description": "Document status that triggers sending"
+        },
+        {
+            "depends_on": "enable_auto_send",
+            "fieldname": "auto_send_conditions",
+            "fieldtype": "Small Text",
+            "label": "Additional Conditions",
+            "description": "JSON conditions: {\"is_paid\": true, \"outstanding_amount\": \"= 0\", \"grand_total\": \"> 1000\"}"
+        },
+        {
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_timing == 'Every Minute' || doc.auto_send_timing == 'Every Hour' || doc.auto_send_timing == 'Every Day' || doc.auto_send_timing == 'Every Week' || doc.auto_send_timing == 'Every Month')",
+            "fieldname": "recurring_send_time",
+            "fieldtype": "Time",
+            "label": "Send Time",
+            "description": "Time of day to send (for Daily/Weekly/Monthly)"
+        }
+    ],
+    "index_web_pages_for_search": 1,
+    "links": [],
+    "modified": "2024-01-25 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Erpnextwats",
+    "name": "WhatsApp Template",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "System Manager",
+            "share": 1,
+            "write": 1
+        }
+    ],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "states": []
+}

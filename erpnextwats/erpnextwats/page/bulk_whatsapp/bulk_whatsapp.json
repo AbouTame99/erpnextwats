@@ -1,0 +1,13 @@
+{
+    "content": [],
+    "doctype": "Page",
+    "icon": "fa fa-whatsapp",
+    "modified": "2024-01-25 00:00:00.000000",
+    "module": "Erpnextwats",
+    "name": "bulk-whatsapp",
+    "page_name": "bulk-whatsapp",
+    "published": 1,
+    "route": "bulk-whatsapp",
+    "title": "Bulk WhatsApp"
+}
+

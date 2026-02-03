@@ -1,0 +1,15 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Frappe
+*.pyc
+__pycache__/
+*.swp
+*.pyo
+.DS_Store
+
+# Local WhatsApp Sessions
+service/.wwebjs_auth/
+service/.wwebjs_cache/

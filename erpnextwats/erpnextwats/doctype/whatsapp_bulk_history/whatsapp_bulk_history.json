@@ -1,0 +1,164 @@
+{
+    "actions": [],
+    "allow_rename": 0,
+    "autoname": "format:BULK-{template}-{###}",
+    "creation": "2024-01-25 00:00:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "job_info_section",
+        "template",
+        "target_doctype",
+        "status",
+        "filters_used",
+        "timing_section",
+        "started_at",
+        "completed_at",
+        "counts_section",
+        "total_recipients",
+        "sent_count",
+        "failed_count",
+        "skipped_count",
+        "results_section",
+        "details",
+        "error_message"
+    ],
+    "fields": [
+        {
+            "fieldname": "job_info_section",
+            "fieldtype": "Section Break",
+            "label": "Job Information"
+        },
+        {
+            "fieldname": "template",
+            "fieldtype": "Link",
+            "label": "Template",
+            "options": "WhatsApp Template",
+            "reqd": 1
+        },
+        {
+            "fieldname": "target_doctype",
+            "fieldtype": "Data",
+            "label": "Target DocType",
+            "reqd": 1
+        },
+        {
+            "fieldname": "status",
+            "fieldtype": "Select",
+            "label": "Status",
+            "options": "Queued\nProcessing\nCompleted\nFailed",
+            "default": "Queued",
+            "reqd": 1
+        },
+        {
+            "fieldname": "filters_used",
+            "fieldtype": "Small Text",
+            "label": "Filters Used",
+            "description": "JSON format of filters or customer list"
+        },
+        {
+            "fieldname": "timing_section",
+            "fieldtype": "Section Break",
+            "label": "Timing"
+        },
+        {
+            "fieldname": "started_at",
+            "fieldtype": "Datetime",
+            "label": "Started At",
+            "read_only": 1
+        },
+        {
+            "fieldname": "completed_at",
+            "fieldtype": "Datetime",
+            "label": "Completed At",
+            "read_only": 1
+        },
+        {
+            "fieldname": "counts_section",
+            "fieldtype": "Section Break",
+            "label": "Counts"
+        },
+        {
+            "fieldname": "total_recipients",
+            "fieldtype": "Int",
+            "label": "Total Recipients",
+            "default": "0",
+            "reqd": 1
+        },
+        {
+            "fieldname": "sent_count",
+            "fieldtype": "Int",
+            "label": "Sent",
+            "default": "0",
+            "read_only": 1
+        },
+        {
+            "fieldname": "failed_count",
+            "fieldtype": "Int",
+            "label": "Failed",
+            "default": "0",
+            "read_only": 1
+        },
+        {
+            "fieldname": "skipped_count",
+            "fieldtype": "Int",
+            "label": "Skipped",
+            "default": "0",
+            "read_only": 1
+        },
+        {
+            "fieldname": "results_section",
+            "fieldtype": "Section Break",
+            "label": "Results"
+        },
+        {
+            "fieldname": "details",
+            "fieldtype": "Long Text",
+            "label": "Details",
+            "description": "JSON array of individual message results"
+        },
+        {
+            "fieldname": "error_message",
+            "fieldtype": "Small Text",
+            "label": "Error Message"
+        }
+    ],
+    "index_web_pages_for_search": 1,
+    "links": [],
+    "modified": "2024-01-25 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Erpnextwats",
+    "name": "WhatsApp Bulk History",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "System Manager",
+            "share": 1,
+            "write": 1
+        },
+        {
+            "create": 0,
+            "delete": 0,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "Sales Manager",
+            "share": 0,
+            "write": 0
+        }
+    ],
+    "sort_field": "modified",
+    "sort_order": "DESC",
+    "states": [],
+    "title_field": "template",
+    "track_changes": 1
+}
