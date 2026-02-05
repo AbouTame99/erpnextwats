@@ -5,6 +5,7 @@ import base64
 import random
 import re
 import time
+import urllib.parse
 from frappe.utils.pdf import get_pdf
 from frappe.utils import get_url, now_datetime
 from erpnext.accounts.utils import get_balance_on
@@ -37,7 +38,7 @@ def proxy_to_service(method, path, data=None):
 
 def get_rendering_context(doc):
     """Prepares context for Jinja rendering, including robust custom balance logic."""
-    ctx = {"doc": doc, "customer_balance": "0.00"}
+    ctx = {"doc": doc, "customer_balance": "0.00", "customer_statement_link": ""}
     
     # 1. Robust Party Detection
     party = (getattr(doc, "customer", None) or 
@@ -50,6 +51,11 @@ def get_rendering_context(doc):
     frappe.logger().debug(f"[WhatsApp] Rendering Context - Doc: {doc.doctype} {doc.name}, Party: {party}")
         
     if party:
+        # Generate customer statement link with URL encoding
+        # This handles spaces, special characters, unicode, etc.
+        encoded_party = urllib.parse.quote(str(party), safe='')
+        ctx["customer_statement_link"] = f"https://erp.jiextrading.com/statement?party={encoded_party}"
+        
         company = getattr(doc, "company", None) or "Jiex Trading"
         try:
             filters = {
