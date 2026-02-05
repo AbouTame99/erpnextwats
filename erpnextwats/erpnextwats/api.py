@@ -438,7 +438,7 @@ def send_via_template(docname, doctype, template_id, phone=None):
             media = None
 
     data = {
-        "userId": frappe.session.user,
+        "userId": "shared_company_session",
         "to": recipient,
         "message": message,
         "media": media
@@ -1708,7 +1708,7 @@ def send_message_direct(phone, message, template):
     try:
         # Use the existing send_via_template logic but with direct message
         data = {
-            "userId": frappe.session.user,
+            "userId": "shared_company_session",
             "to": phone,
             "message": message,
             "media": None
