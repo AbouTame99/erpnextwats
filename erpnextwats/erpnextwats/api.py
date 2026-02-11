@@ -156,16 +156,33 @@ def log_whatsapp_activity(
         retry_count: Number of retry attempts
         metadata: Additional JSON metadata
     """
-    # Validate status
-    valid_statuses = ["Success", "Failed", "Warning", "Info", "Error"]
-    if status not in valid_statuses:
-        status = "Info"  # Default to Info if invalid status
-    
+    # Determine category based on activity_type
+    activity_category = "Message"
+    if "Bulk Send" in activity_type:
+        activity_category = "Bulk"
+    elif "Auto Send" in activity_type:
+        activity_category = "Auto Send"
+    elif "Template" in activity_type:
+        activity_category = "Template"
+    elif "Session" in activity_type:
+        activity_category = "Session"
+    elif "Gateway" in activity_type:
+        activity_category = "Gateway"
+    elif "System" in activity_type or not activity_type:
+        activity_category = "System"
+        
+    # Ensure activity_type is not empty for mandatory field
+    if not activity_type:
+        activity_type = "System Info"
+
     try:
         log_entry = frappe.get_doc({
             "doctype": "WhatsApp Activity Log",
             "activity_type": activity_type,
+            "activity_category": activity_category,
             "status": status,
+            "activity_date": today(),
+            "activity_timestamp": now_datetime(),
             "user": user or frappe.session.user,
             "user_name": frappe.get_value("User", user or frappe.session.user, "full_name") if frappe.session.user else None,
             "session_id": session_id or "shared_company_session",
@@ -179,9 +196,9 @@ def log_whatsapp_activity(
             "error_details": error_details,
             "duration_ms": duration_ms,
             "retry_count": retry_count,
-            "metadata": metadata or {}
+            "metadata_json": json.dumps(metadata) if metadata else "{}"
         })
-        log_entry.insert()
+        log_entry.insert(ignore_permissions=True)
         return log_entry
     except Exception as e:
         frappe.logger().error(f"Failed to log WhatsApp activity: {str(e)}")
@@ -2432,25 +2449,46 @@ def process_monitored_documents(frequency):
         frequency: 'Hourly', 'Daily', or 'Weekly'
     """
     try:
-        # Get all templates with Monitor Documents mode and matching frequency
+        # Get all templates with Monitor Documents mode
         templates = frappe.get_all("WhatsApp Template",
             filters={
                 "enable_auto_send": 1,
-                "auto_send_mode": "Monitor Documents",
-                "monitoring_frequency": frequency
+                "auto_send_mode": "Monitor Documents"
             },
-            fields=["name", "doctype_name", "trigger_status", "visual_conditions"]
+            fields=["name", "monitoring_frequency", "custom_monitoring_interval", "last_monitoring_run"]
         )
         
         if not templates:
             return
+            
+        # Filter templates by frequency
+        run_templates = []
+        for t in templates:
+            if t.monitoring_frequency == frequency:
+                run_templates.append(t)
+            elif t.monitoring_frequency == "Customize" and frequency == "Daily":
+                # Handle custom interval (checked daily)
+                if not t.last_monitoring_run:
+                    run_templates.append(t)
+                else:
+                    days_passed = (now_datetime() - t.last_monitoring_run).days
+                    if days_passed >= (t.custom_monitoring_interval or 1):
+                        run_templates.append(t)
         
-        frappe.logger().info(f"[MONITOR] Processing {len(templates)} templates for {frequency} monitoring")
+        if not run_templates:
+            return
+            
+        frappe.logger().info(f"[MONITOR] Processing {len(run_templates)} templates for {frequency} monitoring")
         
-        for template_data in templates:
+        for template_data in run_templates:
             try:
                 template = frappe.get_doc("WhatsApp Template", template_data.name)
                 process_single_monitored_template(template)
+                
+                # Update last run
+                template.last_monitoring_run = now_datetime()
+                template.save(ignore_permissions=True)
+                frappe.db.commit()
             except Exception as e:
                 log_error(
                     activity_type="Auto Send Failed",
@@ -2487,9 +2525,14 @@ def process_single_monitored_template(template):
         "docstatus": 1  # Only submitted documents
     }
     
-    # Add status filter if specified
+    # Add status filter if specified (supports multi-select)
     if template.trigger_status:
-        filters["status"] = template.trigger_status
+        statuses = [s.strip() for s in template.trigger_status.split(',') if s.strip()]
+        if statuses:
+            if len(statuses) == 1:
+                filters["status"] = statuses[0]
+            else:
+                filters["status"] = ["in", statuses]
     
     # Get submitted documents
     try:
@@ -2698,6 +2741,7 @@ def get_dead_stock_items(template):
         FROM `tabBin` b
         JOIN `tabItem` i ON b.item_code = i.name
         WHERE b.actual_qty > 0
+        AND b.valuation_rate > 0
         AND b.warehouse = %s
         AND DATEDIFF(CURDATE(), (
             SELECT MAX(posting_date) 

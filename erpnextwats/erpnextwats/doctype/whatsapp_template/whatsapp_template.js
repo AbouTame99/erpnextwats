@@ -1,22 +1,48 @@
 frappe.ui.form.on('WhatsApp Template', {
     refresh: function (frm) {
         frm.trigger('render_preview');
+        frm.trigger('setup_status_multiselect');
+
         // If it's dead stock, show preview button
         if (frm.doc.auto_send_mode === 'Dead Stock Marketing') {
             frm.trigger('preview_dead_stock_btn');
         }
     },
+
+    doctype_name: function (frm) {
+        frm.trigger('setup_status_multiselect');
+    },
+
+    setup_status_multiselect: function (frm) {
+        if (!frm.doc.doctype_name) return;
+
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.get_doctype_statuses',
+            args: { doctype: frm.doc.doctype_name },
+            callback: function (r) {
+                if (r.message) {
+                    frm.set_df_property('trigger_status', 'fieldtype', 'MultiSelect');
+                    frm.set_df_property('trigger_status', 'options', r.message.join('\n'));
+                    frm.refresh_field('trigger_status');
+                }
+            }
+        });
+    },
+
     message: function (frm) {
         frm.trigger('render_preview');
     },
+
     preview_doc: function (frm) {
         frm.trigger('render_preview');
     },
+
     auto_send_mode: function (frm) {
         if (frm.doc.auto_send_mode === 'Dead Stock Marketing') {
             frm.trigger('preview_dead_stock_btn');
         }
     },
+
     render_preview: function (frm) {
         if (frm.doc.message && frm.doc.doctype_name && frm.doc.preview_doc) {
             frappe.call({
@@ -44,6 +70,7 @@ frappe.ui.form.on('WhatsApp Template', {
             frm.get_field('preview_html').$wrapper.html('<div class="text-muted p-3 text-center">Select a Reference Document to see preview</div>');
         }
     },
+
     preview_dead_stock_btn: function (frm) {
         if (frm.doc.enable_auto_send && frm.doc.auto_send_mode === 'Dead Stock Marketing') {
             frappe.call({
@@ -67,15 +94,19 @@ frappe.ui.form.on('WhatsApp Template', {
                                 <div style="margin-bottom: 20px;">
                                     <h5>Today's Batch (${r.message.today_batch.length} items)</h5>
                                     <div style="background: #fff; border: 1px solid #dee2e6; padding: 10px; border-radius: 3px; max-height: 250px; overflow-y: auto;">
-                                        ${r.message.today_batch.map(item => `
-                                            <div style="padding: 8px; border-bottom: 1px solid #eee;">
-                                                <div style="font-weight: bold; color: #1a73e8;">${item.item_code}</div>
-                                                <div style="font-size: 0.9em;">${item.item_name}</div>
-                                                <div style="font-size: 0.8em; color: #666;">
-                                                    Qty: ${item.qty} | Value: ${frappe.format(item.value, { fieldtype: 'Currency' })} | Stagnant: ${item.days_stagnant} days
+                                        ${r.message.today_batch.map(item => {
+                            const val = item.value || 0;
+                            const val_formatted = val > 0 ? frappe.format(val, { fieldtype: 'Currency' }) : "Free/Zero Value";
+                            return `
+                                                <div style="padding: 8px; border-bottom: 1px solid #eee;">
+                                                    <div style="font-weight: bold; color: #1a73e8;">${item.item_code}</div>
+                                                    <div style="font-size: 0.9em;">${item.item_name}</div>
+                                                    <div style="font-size: 0.8em; color: #666;">
+                                                        Qty: ${item.qty} | Value: ${val_formatted} | Stagnant: ${item.days_stagnant} days
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        `).join('')}
+                                            `;
+                        }).join('')}
                                     </div>
                                 </div>
                                 

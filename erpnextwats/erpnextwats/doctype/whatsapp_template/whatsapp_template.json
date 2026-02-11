@@ -22,6 +22,7 @@
         "column_break_1",
         "auto_send_frequency",
         "monitoring_frequency",
+        "custom_monitoring_interval",
         "trigger_status",
         "selected_customers_section",
         "selected_customers",
@@ -46,6 +47,7 @@
         "column_break_ds2",
         "cycle_count",
         "last_send_date",
+        "last_monitoring_run",
         "anti_ban_section",
         "hourly_limit",
         "daily_limit",
@@ -164,20 +166,28 @@
         },
         {
             "fieldname": "trigger_status",
-            "fieldtype": "Select",
+            "fieldtype": "Small Text",
             "label": "Trigger When Status Is",
             "options": "",
-            "description": "Select the status that triggers auto-send. Leave empty to trigger on any status change",
+            "description": "Select the status that triggers auto-send. You can select multiple for Monitor Documents mode.",
             "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
         },
         {
             "fieldname": "monitoring_frequency",
             "fieldtype": "Select",
             "label": "Check Frequency",
-            "options": "\nHourly\nDaily\nWeekly",
+            "options": "\nHourly\nDaily\nWeekly\nCustomize",
             "default": "Daily",
             "description": "How often to check submitted documents for condition changes",
             "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Monitor Documents'"
+        },
+        {
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Monitor Documents' && doc.monitoring_frequency == 'Customize'",
+            "fieldname": "custom_monitoring_interval",
+            "fieldtype": "Int",
+            "label": "Interval (Days)",
+            "default": "1",
+            "description": "Check documents every X days"
         },
         {
             "fieldname": "dead_stock_section",
@@ -281,6 +291,12 @@
             "fieldname": "last_send_date",
             "fieldtype": "Date",
             "label": "Last Send Date",
+            "read_only": 1
+        },
+        {
+            "fieldname": "last_monitoring_run",
+            "fieldtype": "Datetime",
+            "label": "Last Monitoring Run",
             "read_only": 1
         },
         {
