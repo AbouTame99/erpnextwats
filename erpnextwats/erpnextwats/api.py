@@ -103,28 +103,40 @@ def validate_phone_medium(phone):
     
     return cleaned
 
-def _log_wrapper(status, activity_type=None, message=None, **kwargs):
-    kwargs.setdefault('status', status)
+def _log_wrapper(log_status, *args, **kwargs):
+    # args[0] can be activity_type, args[1] can be message
+    # Priority: keyword args > positional args > default
+    status = kwargs.pop('status', log_status)
+    activity_type = kwargs.pop('activity_type', None)
+    if not activity_type and len(args) > 0:
+        activity_type = args[0]
+    if not activity_type:
+        activity_type = 'General Activity'
+        
+    message = kwargs.pop('message', None)
+    if not message and len(args) > 1:
+        message = args[1]
+    
+    kwargs['status'] = status
     if message:
         kwargs['message_content'] = message
-    
-    # Handle activity_type being passed either as positional or keyword
-    at = activity_type or kwargs.pop('activity_type', 'General Activity')
-    return log_whatsapp_activity(at, **kwargs)
+        
+    return log_whatsapp_activity(activity_type, **kwargs)
 
-def log_info(activity_type=None, message=None, **kwargs):
-    return _log_wrapper('Info', activity_type, message, **kwargs)
+def log_info(*args, **kwargs):
+    return _log_wrapper('Info', *args, **kwargs)
 
-def log_success(activity_type=None, message=None, **kwargs):
-    return _log_wrapper('Success', activity_type, message, **kwargs)
+def log_success(*args, **kwargs):
+    return _log_wrapper('Success', *args, **kwargs)
 
-def log_error(activity_type=None, message=None, **kwargs):
+def log_error(*args, **kwargs):
+    # Special handling for 'error' keyword
     if 'error' in kwargs:
         kwargs['error_details'] = str(kwargs.pop('error'))
-    return _log_wrapper('Error', activity_type, message, **kwargs)
+    return _log_wrapper('Error', *args, **kwargs)
 
-def log_warning(activity_type=None, message=None, **kwargs):
-    return _log_wrapper('Warning', activity_type, message, **kwargs)
+def log_warning(*args, **kwargs):
+    return _log_wrapper('Warning', *args, **kwargs)
 
 @frappe.whitelist()
 def get_bulk_progress(history_name):
@@ -1386,7 +1398,7 @@ def build_filters_from_visual_conditions(conditions):
             # Check if invoice/order is fully paid
             if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
                 outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-                return outstanding == 0 and doc.docstatus == 1
+                return outstanding == 0 and getattr(doc, 'docstatus', 0) == 1
             elif doc.doctype == "Sales Order":
                 # Check if order is fully paid (if payment tracking exists)
                 return getattr(doc, 'status', '') == 'Completed'
@@ -1394,7 +1406,7 @@ def build_filters_from_visual_conditions(conditions):
         elif status_condition == "Unpaid":
             if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
                 outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-                return outstanding > 0 and doc.docstatus == 1
+                return outstanding > 0 and getattr(doc, 'docstatus', 0) == 1
         
         elif status_condition == "Overdue":
             if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
