@@ -306,10 +306,11 @@
             "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Submit' || doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
         },
         {
+        {
             "fieldname": "condition_examples",
             "fieldtype": "HTML",
             "label": "Examples",
-            "options": "<div style='padding: 15px; background: #f8f9fa; border-radius: 8px;'><h5>Common Filter Examples:</h5><ul><li><strong>Unpaid Invoices:</strong> <code>{\"rules\":[{\"field\":\"outstanding_amount\",\"operator\":\">\",\"value\":0}]}</code> - Use with 'Monitor Documents' mode to check for unpaid invoices daily</li><li><strong>Overdue Invoices:</strong> <code>{\"rules\":[{\"field\":\"status\",\"operator\":\"=\",\"value\":\"Overdue\"}]}</code> - Use with 'Monitor Documents' mode + Trigger Status = Overdue</li><li><strong>High Value Orders:</strong> <code>{\"rules\":[{\"field\":\"grand_total\",\"operator\":\">=\",\"value\":5000}]}</code></li><li><strong>Specific Customer Group:</strong> <code>{\"rules\":[{\"field\":\"customer_group\",\"operator\":\"=\",\"value\":\"Corporate\"}]}</code></li></ul><h6 style='margin-top: 15px;'>When to use Monitor Documents mode:</h6><p style='color: #666;'>Use this mode when you want to check already-submitted documents periodically. For example: "Check every day for Sales Invoices that became Overdue" or "Check hourly for unpaid invoices".</p></div>"
+            "options": "<div style='padding: 15px; background: #f8f9fa; border-radius: 8px;'><h5>Filter Examples</h5><ul><li>Unpaid: outstanding_amount&gt;0</li><li>Overdue: status=Overdue</li><li>High Value: grand_total&gt;=5000</li></ul></div>"
         },
         {
             "fieldname": "anti_ban_section",
