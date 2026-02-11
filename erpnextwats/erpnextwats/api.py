@@ -7,6 +7,10 @@ import re
 import time
 import urllib.parse
 import traceback
+import os
+import sys
+import mimetypes
+from datetime import datetime, timedelta
 from frappe.utils.pdf import get_pdf
 from frappe.utils import get_url, now_datetime, today
 from erpnext.accounts.utils import get_balance_on
@@ -30,7 +34,18 @@ def proxy_to_service(method, endpoint, data=None):
 
 def get_rendering_context(doc):
     """Provides context for Jinja templates."""
-    from frappe.utils import format_date, format_datetime, format_currency, flt
+    from frappe.utils import format_date, format_datetime, flt
+    
+    # format_currency might move between versions, use a resilient import
+    try:
+        from frappe.utils import format_currency
+    except ImportError:
+        try:
+            from frappe.utils.data import format_currency
+        except ImportError:
+            # Fallback to frappe.format
+            def format_currency(amount, currency=None, precision=None):
+                return frappe.format(amount, "Currency", {"currency": currency})
     
     ctx = {
         "doc": doc,
@@ -249,12 +264,10 @@ def get_bulk_progress(history_name):
         resumes_at = None
         if history.status == "Paused" and history.error_message:
             # Parse "Resuming at HH:MM" from error message
-            import re
             match = re.search(r'Resuming at (\d{2}:\d{2})', history.error_message)
             if match:
                 time_str = match.group(1)
                 # Create datetime for today with that time
-                from datetime import datetime, timedelta
                 now = now_datetime()
                 hour, minute = map(int, time_str.split(':'))
                 resume_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -374,7 +387,6 @@ def send_via_template(docname, doctype, template_id, phone=None):
                         pass
             
             # Method 2: Try SQL query with LIKE to find file
-            import os
             filename = os.path.basename(normalized_url)
             
             if not file_doc:
@@ -412,10 +424,6 @@ def send_via_template(docname, doctype, template_id, phone=None):
             
             if not file_doc:
                 raise Exception(f"File not found: {file_url}. Tried variations: {', '.join(url_variations[:5])}")
-            
-            # Get mimetype from file extension or file_type
-            import mimetypes
-            import os
             
             # Get filename with extension
             original_filename = file_doc.file_name or "attachment"
@@ -705,15 +713,7 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
 def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hour=50):
     """
     Process bulk send with hard retry logic and smart anti-ban delays.
-    
-    Features:
-    - Hard retry: 3 attempts per customer before moving to next
-    - Smart delay: 10-60s with adaptive algorithm based on failure rate
-    - Real-time updates to WhatsApp Bulk History after each customer
-    - Medium phone validation (clean/format numbers)
     """
-    import sys
-    from datetime import timedelta
     
     # Initialize counters
     sent_count = 0
@@ -898,7 +898,6 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                             time.sleep(delay)
                 
                 except Exception as e:
-                    import traceback
                     error_msg = str(e)
                     log_message(f"✗ Exception on attempt {attempt}: {error_msg}")
                     final_error = error_msg
@@ -934,7 +933,6 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                 time.sleep(delay)
         
         except Exception as e:
-            import traceback
             log_message(f"✗ EXCEPTION processing {doc_name}: {str(e)}")
             customer_result["status"] = "Failed"
             customer_result["error"] = str(e)
@@ -1009,8 +1007,6 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
     Resume a bulk send job that was paused due to hourly limit.
     This is called automatically after the delay period.
     """
-    import sys
-    from datetime import timedelta
     
     # Initialize counters - will be loaded from history
     sent_count = 0
@@ -2277,11 +2273,8 @@ def preview_matching_documents(template_name, conditions_json):
             docs = frappe.get_all(doctype, fields=["name"], limit=10)
             return {"status": "success", "count": len(docs), "documents": [d.name for d in docs]}
         
-        # Parse visual conditions
-        conditions = json.loads(conditions_json)
-        
-        # Build frappe filters from visual conditions
-        filters = build_filters_from_visual_conditions(conditions)
+        # Build frappe filters from visual conditions using the unified builder
+        filters = build_filters_from_visual_conditions(conditions_json)
         
         # Get matching documents
         docs = frappe.get_all(doctype, filters=filters, fields=["name"], limit=50)
@@ -2295,43 +2288,6 @@ def preview_matching_documents(template_name, conditions_json):
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-
-def build_filters_from_visual_conditions(conditions):
-    """Convert visual builder conditions to frappe filters."""
-    try:
-        filters = {}
-        
-        if not conditions or not isinstance(conditions, dict):
-            return filters
-        
-        rules = conditions.get("rules", [])
-        
-        for rule in rules:
-            if isinstance(rule, dict):
-                field = rule.get("field")
-                op = rule.get("operator", "=")
-                value = rule.get("value")
-                
-                if field and value is not None:
-                    if op == "=":
-                        filters[field] = value
-                    elif op == ">":
-                        filters[field] = [">", value]
-                    elif op == "<":
-                        filters[field] = ["<", value]
-                    elif op == ">=":
-                        filters[field] = [">=", value]
-                    elif op == "<=":
-                        filters[field] = ["<=", value]
-                    elif op == "!=":
-                        filters[field] = ["!=", value]
-        
-        return filters
-        
-    except Exception as e:
-        frappe.logger().error(f"[AUTO-SEND] Error building filters: {str(e)}")
-        return {}
 
 
 # ===== AUTO-SEND FILTER EXAMPLES =====
@@ -2585,7 +2541,7 @@ def process_single_monitored_template(template):
             
             # Anti-ban delay between sends
             if sent_count < len(docs):
-                delay = random.randint(10, 30)
+                delay = smart_delay(sent_count, failed_count)
                 time.sleep(delay)
                 
         except Exception as e:
@@ -2980,18 +2936,21 @@ def send_dead_stock_campaign(template):
         # Process each customer
         for customer in customers:
             try:
-                # Prepare message with item variables
-                message = template.message
-                
-                # Replace variables
-                message = message.replace("{{ item_code }}", item_code or "")
-                message = message.replace("{{ item_name }}", item_data.item_name or "")
-                message = message.replace("{{ description }}", item_data.description or "")
-                message = message.replace("{{ qty }}", str(item_data.qty or 0))
-                message = message.replace("{{ days_stagnant }}", str(item_data.days_stagnant or 0))
-                message = message.replace("{{ cost }}", str(item_data.cost or 0))
-                message = message.replace("{{ value }}", str(item_data.value or 0))
-                message = message.replace("{{ customer_name }}", customer.customer_name or "")
+                # Prepare message with item variables using Jinja for robustness
+                ctx = {
+                    "item_code": item_code,
+                    "item_name": item_data.item_name,
+                    "description": item_data.description,
+                    "qty": item_data.qty,
+                    "days_stagnant": item_data.days_stagnant,
+                    "cost": item_data.cost,
+                    "value": item_data.value,
+                    "customer_name": customer.customer_name,
+                    "frappe": frappe,
+                    "today": today(),
+                    "now": now_datetime()
+                }
+                message = frappe.render_template(template.message, ctx)
                 
                 # Send with retry logic (3 attempts)
                 success = False
