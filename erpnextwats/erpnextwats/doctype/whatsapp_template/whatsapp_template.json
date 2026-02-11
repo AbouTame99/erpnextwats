@@ -164,9 +164,10 @@
         },
         {
             "fieldname": "trigger_status",
-            "fieldtype": "Data",
+            "fieldtype": "Select",
             "label": "Trigger When Status Is",
-            "description": "e.g., 'Unpaid', 'Paid', 'Overdue', 'To Deliver and Bill' - Leave empty to trigger on any status",
+            "options": "",
+            "description": "Select the status that triggers auto-send. Leave empty to trigger on any status change",
             "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
         },
         {
@@ -289,9 +290,10 @@
             "description": "Define filters like: outstanding_amount > 0, grand_total > 1000, etc."
         },
         {
-            "fieldname": "preview_conditions_btn",
-            "fieldtype": "Button",
-            "label": "Preview Matching Documents"
+            "fieldname": "conditions_preview_html",
+            "fieldtype": "HTML",
+            "label": "Conditions Preview",
+            "depends_on": "eval:doc.enable_auto_send && doc.visual_conditions"
         },
         {
             "fieldname": "matching_docs_preview",

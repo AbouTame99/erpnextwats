@@ -50,6 +50,11 @@ def log_whatsapp_activity(
         retry_count: Number of retry attempts
         metadata: Additional JSON metadata
     """
+    # Validate status
+    valid_statuses = ["Success", "Failed", "Warning", "Info", "Error"]
+    if status not in valid_statuses:
+        status = "Info"  # Default to Info if invalid status
+    
     try:
         log_entry = frappe.get_doc({
             "doctype": "WhatsApp Activity Log",
@@ -64,362 +69,32 @@ def log_whatsapp_activity(
             "template": template,
             "customer": customer,
             "customer_phone": customer_phone,
-            "message_content": (message_content[:1000] + "...") if message_content and len(message_content) > 1000 else message_content,
+            "message_content": message_content[:1000] if message_content else None,  # Truncate for privacy
             "error_details": error_details,
             "duration_ms": duration_ms,
             "retry_count": retry_count,
-            "metadata_json": json.dumps(metadata) if metadata else None,
-            "ip_address": frappe.request.environ.get("REMOTE_ADDR") if frappe.request else None,
-            "user_agent": frappe.request.environ.get("HTTP_USER_AGENT")[:200] if frappe.request and frappe.request.environ.get("HTTP_USER_AGENT") else None
+            "metadata": metadata or {}
         })
-        log_entry.insert(ignore_permissions=True)
-        frappe.db.commit()
+        log_entry.insert()
+        return log_entry
     except Exception as e:
-        # If logging fails, at least log to console
-        print(f"[LOGGING ERROR] Failed to create log entry: {str(e)}")
-        frappe.logger().error(f"Failed to create WhatsApp activity log: {str(e)}")
-
-def log_error(activity_type, error, user=None, **kwargs):
-    """Convenience function for logging errors with stack trace"""
-    error_msg = str(error)
-    stack = traceback.format_exc()
-    # Add stack trace to metadata
-    metadata = kwargs.get('metadata', {})
-    metadata['stack_trace'] = stack
-    kwargs['metadata'] = metadata
-    log_whatsapp_activity(
-        activity_type=activity_type,
-        status="Error",
-        user=user,
-        error_details=error_msg,
-        **kwargs
-    )
-
-def log_success(activity_type, user=None, **kwargs):
-    """Convenience function for logging successful operations"""
-    log_whatsapp_activity(
-        activity_type=activity_type,
-        status="Success",
-        user=user,
-        **kwargs
-    )
-
-def log_warning(activity_type, warning_msg, user=None, **kwargs):
-    """Convenience function for logging warnings"""
-    log_whatsapp_activity(
-        activity_type=activity_type,
-        status="Warning",
-        user=user,
-        error_details=warning_msg,
-        **kwargs
-    )
-
-def log_info(activity_type, user=None, **kwargs):
-    """Convenience function for logging info"""
-    log_whatsapp_activity(
-        activity_type=activity_type,
-        status="Info",
-        user=user,
-        **kwargs
-    )
-
-@frappe.whitelist()
-def get_whatsapp_logs(
-    activity_type=None,
-    category=None,
-    status=None,
-    user=None,
-    customer=None,
-    template=None,
-    date_from=None,
-    date_to=None,
-    limit=100,
-    offset=0
-):
-    """
-    Query WhatsApp activity logs with filters.
-    
-    Returns filtered logs for dashboard/reports.
-    """
-    try:
-        filters = {}
-        
-        if activity_type:
-            filters["activity_type"] = activity_type
-        if category:
-            filters["activity_category"] = category
-        if status:
-            filters["status"] = status
-        if user:
-            filters["user"] = user
-        if customer:
-            filters["customer"] = customer
-        if template:
-            filters["template"] = template
-        if date_from:
-            filters["activity_date"] = [">=", date_from]
-        if date_to:
-            filters["activity_date"] = ["<=", date_to]
-        
-        logs = frappe.get_all(
-            "WhatsApp Activity Log",
-            filters=filters,
-            fields=[
-                "name", "activity_timestamp", "activity_date", "activity_type",
-                "activity_category", "status", "user", "user_name", "customer",
-                "customer_phone", "template", "duration_ms", "retry_count"
-            ],
-            order_by="activity_timestamp desc",
-            limit=limit,
-            limit_start=offset
-        )
-        
-        # Get total count
-        total = frappe.db.count("WhatsApp Activity Log", filters=filters)
-        
-        return {
-            "status": "success",
-            "logs": logs,
-            "total": total,
-            "limit": limit,
-            "offset": offset
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@frappe.whitelist()
-def get_whatsapp_dashboard_stats():
-    """
-    Get real-time dashboard statistics.
-    
-    Returns summary metrics for the dashboard.
-    """
-    try:
-        today_date = today()
-        
-        # Today's stats
-        today_stats = frappe.db.sql("""
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'Success' THEN 1 ELSE 0 END) as success,
-                SUM(CASE WHEN status = 'Failed' THEN 1 ELSE 0 END) as failed,
-                SUM(CASE WHEN status = 'Error' THEN 1 ELSE 0 END) as errors,
-                SUM(CASE WHEN activity_category = 'Message' THEN 1 ELSE 0 END) as messages,
-                SUM(CASE WHEN activity_category = 'Bulk' THEN 1 ELSE 0 END) as bulk_sends
-            FROM `tabWhatsApp Activity Log`
-            WHERE activity_date = %s
-        """, (today_date,), as_dict=True)[0]
-        
-        # Last 7 days trend
-        weekly_stats = frappe.db.sql("""
-            SELECT 
-                activity_date,
-                COUNT(*) as count,
-                SUM(CASE WHEN status = 'Success' THEN 1 ELSE 0 END) as success
-            FROM `tabWhatsApp Activity Log`
-            WHERE activity_date >= DATE_SUB(%s, INTERVAL 7 DAY)
-            GROUP BY activity_date
-            ORDER BY activity_date DESC
-        """, (today_date,), as_dict=True)
-        
-        # Recent errors (last 24 hours)
-        recent_errors = frappe.db.sql("""
-            SELECT activity_type, error_details, activity_timestamp, user
-            FROM `tabWhatsApp Activity Log`
-            WHERE status = 'Error'
-            AND activity_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-            ORDER BY activity_timestamp DESC
-            LIMIT 10
-        """, as_dict=True)
-        
-        # Session status (latest)
-        latest_session = frappe.db.sql("""
-            SELECT activity_type, status, activity_timestamp
-            FROM `tabWhatsApp Activity Log`
-            WHERE activity_category = 'Session'
-            ORDER BY activity_timestamp DESC
-            LIMIT 1
-        """, as_dict=True)
-        
-        return {
-            "status": "success",
-            "today": {
-                "total": today_stats.total or 0,
-                "success": today_stats.success or 0,
-                "failed": today_stats.failed or 0,
-                "errors": today_stats.errors or 0,
-                "messages": today_stats.messages or 0,
-                "bulk_sends": today_stats.bulk_sends or 0
-            },
-            "weekly_trend": weekly_stats,
-            "recent_errors": recent_errors,
-            "latest_session": latest_session[0] if latest_session else None
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# ===== END LOGGING SYSTEM =====
-
-@frappe.whitelist()
-def proxy_to_service(method, path, data=None):
-    """Proxies requests to the WhatsApp Gateway."""
-    gateway_url = "http://127.0.0.1:3000"
-    service_url = f"{gateway_url.rstrip('/')}/{path}"
-    
-    try:
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except:
-                pass
-
-        if method.upper() == "GET":
-            response = requests.get(service_url, timeout=60)
-        else:
-            response = requests.post(service_url, json=data, timeout=60)
-            
-        if response.status_code == 200 and response.text:
-            return response.json()
-        
-        error_detail = response.text if response.text else "No details provided"
-        return {"status": "error", "message": f"Gateway Error {response.status_code}: {error_detail}"}
-    except Exception as e:
-        return {"status": "error", "message": f"Could not reach WhatsApp Gateway at {gateway_url}"}
-
-def get_rendering_context(doc):
-    """Prepares context for Jinja rendering, including robust custom balance logic."""
-    ctx = {"doc": doc, "customer_balance": "0.00", "customer_statement_link": ""}
-    
-    # 1. Robust Party Detection
-    party = (getattr(doc, "customer", None) or 
-             getattr(doc, "supplier", None) or 
-             getattr(doc, "party", None))
-             
-    if not party and doc.doctype in ["Customer", "Supplier"]:
-        party = doc.name
-        
-    frappe.logger().debug(f"[WhatsApp] Rendering Context - Doc: {doc.doctype} {doc.name}, Party: {party}")
-        
-    if party:
-        # Generate customer statement link with URL encoding
-        # This handles spaces, special characters, unicode, etc.
-        encoded_party = urllib.parse.quote(str(party), safe='')
-        ctx["customer_statement_link"] = f"https://erp.jiextrading.com/statement?party={encoded_party}"
-        
-        company = getattr(doc, "company", None) or "Jiex Trading"
-        try:
-            filters = {
-                "company": company,
-                "is_cancelled": 0,
-                "party": party,
-                "posting_date": ["between", ["2022-01-01", "2090-01-01"]]
-            }
-            
-            raw_data = frappe.get_all("GL Entry", 
-                filters=filters,
-                fields=["posting_date", "voucher_type", "voucher_no", "debit", "credit"],
-                order_by="posting_date asc",
-                ignore_permissions=True 
-            )
-            
-            net_data_map = {}
-            voucher_order = []
-            
-            for entry in raw_data:
-                v_no = entry.voucher_no
-                if v_no not in net_data_map:
-                    net_data_map[v_no] = {"debit": 0.0, "credit": 0.0}
-                    voucher_order.append(v_no)
-                
-                net_data_map[v_no]["debit"] += float(entry.debit)
-                net_data_map[v_no]["credit"] += float(entry.credit)
-
-            current_balance = 0.0
-            for v_no in voucher_order:
-                row = net_data_map[v_no]
-                d, c = row["debit"], row["credit"]
-                current_balance += (d - c)
-            
-            from frappe.utils import fmt_money
-            ctx["customer_balance"] = fmt_money(current_balance, currency=doc.get("currency") or "MAD")
-                
-        except Exception as e:
-            frappe.log_error(title="WhatsApp Balance Calc Error", message=f"Doc: {doc.name}, Error: {str(e)}")
-            
-    return ctx
-
-# ===== NEW BULK SEND HELPERS =====
-
-def smart_delay(sent_count, failed_count):
-    """
-    AI-like smart delay algorithm with adaptive timing.
-    Base: 10-60 seconds random jitter
-    Adaptive: Increases delay if failure rate is high (>20%)
-    """
-    # Base delay: 10-60 seconds with random jitter
-    base = random.randint(10, 60)
-    
-    # Adaptive: If failure rate is high, add extra delay
-    if sent_count > 0:
-        total = sent_count + failed_count
-        if total > 0:
-            failure_rate = failed_count / total
-            if failure_rate > 0.2:  # More than 20% failing
-                extra = random.randint(10, 20)
-                base += extra
-                frappe.logger().info(f"[SMART DELAY] High failure rate detected ({failure_rate:.1%}), adding {extra}s extra delay")
-    
-    # Add slight randomness (-2 to +5 seconds) to avoid patterns
-    jitter = random.randint(-2, 5)
-    final_delay = max(10, base + jitter)  # Ensure minimum 10 seconds
-    
-    frappe.logger().info(f"[SMART DELAY] Waiting {final_delay} seconds (base: {base}, jitter: {jitter})")
-    return final_delay
-
-def validate_gateway_and_session():
-    """Validate that WhatsApp gateway is running and session is active."""
-    gateway_url = "http://127.0.0.1:3000"
-    
-    try:
-        # Check A: Ping gateway health
-        response = requests.get(f"{gateway_url}/api/whatsapp/status", timeout=10)
-        if response.status_code != 200:
-            return {"valid": False, "error": f"Gateway returned status {response.status_code}"}
-        
-        gateway_data = response.json()
-        
-        # Check B: Validate WhatsApp session is connected
-        if not gateway_data.get("connected", False):
-            return {"valid": False, "error": "WhatsApp session not connected. Please scan QR code."}
-        
-        return {"valid": True, "gateway_data": gateway_data}
-    
-    except requests.exceptions.ConnectionError:
-        return {"valid": False, "error": f"Cannot connect to WhatsApp Gateway at {gateway_url}. Is it running?"}
-    except Exception as e:
-        return {"valid": False, "error": f"Gateway validation error: {str(e)}"}
+        frappe.logger().error(f"Failed to log WhatsApp activity: {str(e)}")
+        return None
 
 def validate_phone_medium(phone):
-    """
-    Medium phone validation:
-    - Remove spaces, dashes, parentheses
-    - Ensure starts with +
-    - Standardize format (remove leading 0 after country code)
-    """
+    """Simple phone validation for bulk sending."""
     if not phone:
         return None
-    
+        
     # Remove all non-numeric except + at start
     cleaned = re.sub(r'[\s\-\(\)\.]','', str(phone))
     
     # Ensure starts with +
     if not cleaned.startswith('+'):
         # If it starts with 0, assume it's a local number without country code
-        # You might want to add default country code here
         cleaned = '+' + cleaned.lstrip('0')
     
     # Remove leading 0 after country code (e.g., +212 0612 -> +212612)
-    # Match pattern like +XX0... and remove the 0
     cleaned = re.sub(r'^(\+\d{1,3})0', r'\1', cleaned)
     
     # Validate format: + followed by 10-15 digits
@@ -427,6 +102,29 @@ def validate_phone_medium(phone):
         return None
     
     return cleaned
+
+def _log_wrapper(status, activity_type=None, message=None, **kwargs):
+    kwargs.setdefault('status', status)
+    if message:
+        kwargs['message_content'] = message
+    
+    # Handle activity_type being passed either as positional or keyword
+    at = activity_type or kwargs.pop('activity_type', 'General Activity')
+    return log_whatsapp_activity(at, **kwargs)
+
+def log_info(activity_type=None, message=None, **kwargs):
+    return _log_wrapper('Info', activity_type, message, **kwargs)
+
+def log_success(activity_type=None, message=None, **kwargs):
+    return _log_wrapper('Success', activity_type, message, **kwargs)
+
+def log_error(activity_type=None, message=None, **kwargs):
+    if 'error' in kwargs:
+        kwargs['error_details'] = str(kwargs.pop('error'))
+    return _log_wrapper('Error', activity_type, message, **kwargs)
+
+def log_warning(activity_type=None, message=None, **kwargs):
+    return _log_wrapper('Warning', activity_type, message, **kwargs)
 
 @frappe.whitelist()
 def get_bulk_progress(history_name):
@@ -479,15 +177,14 @@ def get_bulk_progress(history_name):
         return {"status": "error", "message": str(e)}
 
 @frappe.whitelist()
-def get_bulk_history(limit=50):
+def get_bulk_history():
     """Get all bulk send history."""
     try:
         history = frappe.get_all(
             "WhatsApp Bulk History",
             fields=["name", "template", "target_doctype", "status", "total_recipients", 
                     "sent_count", "failed_count", "skipped_count", "started_at", "completed_at"],
-            order_by="started_at desc",
-            limit=limit
+            order_by="started_at desc"
         )
         return {"status": "success", "history": history}
     except Exception as e:
@@ -820,7 +517,7 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
     
     # STEP 4: Get documents
     frappe.logger().info(f"[BULK SEND] Fetching documents from {doctype}")
-    docs = frappe.get_all(doctype, filters=filters, fields=["name"], limit=1000)
+    docs = frappe.get_all(doctype, filters=filters, fields=["name"])
     frappe.logger().info(f"[BULK SEND] Found {len(docs)} documents to process")
     
     if not docs:
@@ -1607,42 +1304,112 @@ def handle_auto_send(doc, method):
             )
             continue
 
-def check_status_condition(doc, status_condition):
-    """Check if document status matches the condition."""
-    # Handle special statuses
-    if status_condition == "Paid":
-        # Check if invoice/order is fully paid
-        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-            outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-            return outstanding == 0 and doc.docstatus == 1
-        elif doc.doctype == "Sales Order":
-            # Check if order is fully paid (if payment tracking exists)
-            return getattr(doc, 'status', '') == 'Completed'
+@frappe.whitelist()
+def preview_conditions(doctype, conditions):
+    """
+    Preview documents that match the visual conditions.
     
-    elif status_condition == "Unpaid":
-        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-            outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-            return outstanding > 0 and doc.docstatus == 1
+    Used for testing conditions in WhatsApp Template form.
+    """
+    try:
+        # Build filters from conditions
+        filters = build_filters_from_visual_conditions(conditions)
+        
+        # Get all matching documents
+        docs = frappe.get_all(doctype, filters=filters, fields=["name", "status", "customer", "grand_total", "outstanding_amount"])
+        
+        return {
+            "status": "success",
+            "total": len(docs),
+            "docs": docs
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+def build_filters_from_visual_conditions(conditions):
+    """
+    Convert visual conditions JSON to Frappe filters.
     
-    elif status_condition == "Overdue":
-        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-            from frappe.utils import getdate, today
-            due_date = getattr(doc, 'due_date', None)
-            if due_date:
-                return getdate(due_date) < getdate(today()) and frappe.utils.flt(getattr(doc, 'outstanding_amount', 0)) > 0
+    Args:
+        conditions: List of condition objects from visual_conditions field
     
-    elif status_condition == "Submitted":
-        return doc.docstatus == 1
+    Returns:
+        List of filters compatible with frappe.get_all()
+    """
+    filters = []
     
-    elif status_condition == "Draft":
-        return doc.docstatus == 0
+    if not conditions:
+        return filters
     
-    elif status_condition == "Cancelled":
-        return doc.docstatus == 2
+    for condition in conditions:
+        field = condition.field
+        operator = condition.operator
+        value = condition.value
+        
+        # Convert operator to Frappe format
+        operator_map = {
+            "=": "=",
+            "!=": "!=",
+            ">": ">",
+            "<": "<",
+            ">=": ">=",
+            "<=": "<=",
+            "contains": "like",
+            "starts_with": "like",
+            "ends_with": "like"
+        }
+        
+        frappe_operator = operator_map.get(operator)
+        
+        if not frappe_operator:
+            continue
+        
+        # Handle like operators
+        if operator in ["contains", "starts_with", "ends_with"]:
+            if operator == "contains":
+                value = f"%{value}%"
+            elif operator == "starts_with":
+                value = f"{value}%"
+            elif operator == "ends_with":
+                value = f"%{value}"
+        
+        filters.append([field, frappe_operator, value])
     
-    # Fallback to direct status match
-    current_status = getattr(doc, 'status', None) or getattr(doc, 'docstatus', None)
-    return str(current_status) == str(status_condition)
+    def check_status_condition(doc, status_condition):
+        """Check if document status matches the condition."""
+        # Handle special statuses
+        if status_condition == "Paid":
+            # Check if invoice/order is fully paid
+            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+                outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
+                return outstanding == 0 and doc.docstatus == 1
+            elif doc.doctype == "Sales Order":
+                # Check if order is fully paid (if payment tracking exists)
+                return getattr(doc, 'status', '') == 'Completed'
+        
+        elif status_condition == "Unpaid":
+            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+                outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
+                return outstanding > 0 and doc.docstatus == 1
+        
+        elif status_condition == "Overdue":
+            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+                # Check if invoice is overdue (due date in past and not paid)
+                due_date = getattr(doc, 'due_date', None)
+                if due_date:
+                    from datetime import datetime
+                    today = datetime.now().date()
+                    due_date_obj = datetime.strptime(due_date, '%Y-%m-%d').date()
+                    return due_date_obj < today and getattr(doc, 'outstanding_amount', 0) > 0
+        
+        # For other statuses, direct comparison
+        return getattr(doc, 'status', '') == status_condition
+
+    return filters
 
 def check_conditions(doc, conditions):
     """Check if document meets the specified conditions."""
@@ -2366,6 +2133,27 @@ def send_message_direct(phone, message, template):
         return {"status": "error", "message": str(e)}
 
 
+@frappe.whitelist()
+def get_doctype_statuses(doctype):
+    """Returns a list of unique status values for a given DocType."""
+    try:
+        if not doctype:
+            return []
+            
+        # Get status field options from DocType
+        meta = frappe.get_meta(doctype)
+        status_field = meta.get_field('status')
+        
+        if status_field and status_field.fieldtype == 'Select' and status_field.options:
+            options = status_field.options.split('\n')
+            return [o.strip() for o in options if o.strip()]
+            
+        # Fallback: get unique statuses from database (limited to last 1000 docs for speed)
+        statuses = frappe.get_all(doctype, fields=['status'], distinct=True, limit=1000)
+        return sorted([s.status for s in statuses if s.get('status')])
+    except Exception:
+        return []
+
 def log_auto_send(template_name, customer, status, error):
     """Log auto-send attempt."""
     try:
@@ -2650,7 +2438,7 @@ def process_single_monitored_template(template):
     
     # Get submitted documents
     try:
-        docs = frappe.get_all(doctype, filters=filters, fields=["name"], limit=100)
+        docs = frappe.get_all(doctype, filters=filters, fields=["name"])
     except Exception as e:
         log_error(
             activity_type="Monitor Documents Query Error",
@@ -2877,7 +2665,7 @@ def get_dead_stock_items(template):
         return []
 
 
-def get_todays_dead_stock_batch(template):
+def get_todays_dead_stock_batch(template, is_preview=False):
     """
     Get today's batch of dead stock items.
     Rotates through the list, sending X items per day.
@@ -2906,15 +2694,18 @@ def get_todays_dead_stock_batch(template):
     
     # Check if we completed a full cycle
     cycle_completed = False
+    new_cycle_count = template.cycle_count or 0
     if new_index < last_index or (new_index == 0 and last_index > 0):
         cycle_completed = True
-        template.cycle_count = (template.cycle_count or 0) + 1
+        new_cycle_count += 1
     
-    # Update tracking fields
-    template.last_sent_index = new_index
-    template.last_send_date = frappe.utils.today()
-    template.save(ignore_permissions=True)
-    frappe.db.commit()
+    if not is_preview:
+        # Update tracking fields only if not a preview
+        template.last_sent_index = new_index
+        template.last_send_date = frappe.utils.today()
+        template.cycle_count = new_cycle_count
+        template.save(ignore_permissions=True)
+        frappe.db.commit()
     
     log_info(
         activity_type="Dead Stock Batch Prepared",
@@ -2925,7 +2716,8 @@ def get_todays_dead_stock_batch(template):
             "last_index": last_index,
             "new_index": new_index,
             "cycle_completed": cycle_completed,
-            "cycle_count": template.cycle_count
+            "cycle_count": new_cycle_count,
+            "is_preview": is_preview
         }
     )
     
@@ -3027,7 +2819,7 @@ def send_dead_stock_campaign(template):
     One message per item per customer with anti-ban protection.
     """
     # Get today's dead stock batch
-    today_items, total_pool = get_todays_dead_stock_batch(template)
+    today_items, total_pool = get_todays_dead_stock_batch(template, is_preview=False)
     
     if not today_items:
         log_warning(
@@ -3213,7 +3005,7 @@ def preview_dead_stock_items(template_name):
             }
         
         # Get today's batch
-        today_items, total = get_todays_dead_stock_batch(template)
+        today_items, total = get_todays_dead_stock_batch(template, is_preview=True)
         
         # Get tomorrow's batch
         last_index = template.last_sent_index or 0

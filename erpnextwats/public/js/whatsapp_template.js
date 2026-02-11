@@ -8,7 +8,7 @@ erpnextwats.VisualConditionBuilder = class {
     constructor(wrapper, fieldname) {
         this.wrapper = wrapper;
         this.fieldname = fieldname;
-        this.conditions = {operator: 'AND', rules: []};
+        this.conditions = { operator: 'AND', rules: [] };
         this.init();
     }
 
@@ -58,7 +58,7 @@ erpnextwats.VisualConditionBuilder = class {
         });
 
         // Remove rule
-        this.wrapper.on('click', '.vcb-remove-rule', function() {
+        this.wrapper.on('click', '.vcb-remove-rule', function () {
             $(this).closest('.vcb-rule').remove();
             self.update_json();
         });
@@ -96,7 +96,7 @@ erpnextwats.VisualConditionBuilder = class {
         `;
 
         this.$container.append(rule_html);
-        
+
         if (data.field) {
             const $rule = this.$container.find('.vcb-rule').last();
             $rule.find('.vcb-field').val(data.field);
@@ -110,81 +110,81 @@ erpnextwats.VisualConditionBuilder = class {
     get_field_options() {
         // Get the selected DocType from the form
         const doctype = cur_frm ? cur_frm.doc.doctype_name : null;
-        
+
         // Base fields for all doctypes
         let fields = [
-            {value: 'status', label: 'Status'},
-            {value: 'docstatus', label: 'Document Status (0=Draft, 1=Submitted, 2=Cancelled)'},
-            {value: 'creation', label: 'Created Date'},
-            {value: 'modified', label: 'Modified Date'},
-            {value: 'owner', label: 'Owner'},
-            {value: 'modified_by', label: 'Modified By'},
-            {value: 'company', label: 'Company'}
+            { value: 'status', label: 'Status' },
+            { value: 'docstatus', label: 'Document Status (0=Draft, 1=Submitted, 2=Cancelled)' },
+            { value: 'creation', label: 'Created Date' },
+            { value: 'modified', label: 'Modified Date' },
+            { value: 'owner', label: 'Owner' },
+            { value: 'modified_by', label: 'Modified By' },
+            { value: 'company', label: 'Company' }
         ];
-        
+
         // Add doctype-specific fields
         if (doctype) {
             if (doctype === 'Sales Invoice' || doctype === 'Purchase Invoice') {
                 fields = fields.concat([
-                    {value: 'outstanding_amount', label: '💰 Outstanding Amount (unpaid amount)'},
-                    {value: 'grand_total', label: '💵 Grand Total'},
-                    {value: 'total', label: 'Total'},
-                    {value: 'due_date', label: '📅 Due Date'},
-                    {value: 'is_paid', label: '✅ Is Paid (0 or 1)'},
-                    {value: 'customer', label: '👤 Customer'},
-                    {value: 'customer_name', label: 'Customer Name'},
-                    {value: 'posting_date', label: '📅 Posting Date'}
+                    { value: 'outstanding_amount', label: '💰 Outstanding Amount (unpaid amount)' },
+                    { value: 'grand_total', label: '💵 Grand Total' },
+                    { value: 'total', label: 'Total' },
+                    { value: 'due_date', label: '📅 Due Date' },
+                    { value: 'is_paid', label: '✅ Is Paid (0 or 1)' },
+                    { value: 'customer', label: '👤 Customer' },
+                    { value: 'customer_name', label: 'Customer Name' },
+                    { value: 'posting_date', label: '📅 Posting Date' }
                 ]);
             } else if (doctype === 'Sales Order' || doctype === 'Purchase Order') {
                 fields = fields.concat([
-                    {value: 'grand_total', label: '💵 Grand Total'},
-                    {value: 'total', label: 'Total'},
-                    {value: 'customer', label: '👤 Customer'},
-                    {value: 'customer_name', label: 'Customer Name'},
-                    {value: 'delivery_date', label: '📅 Delivery Date'},
-                    {value: 'transaction_date', label: '📅 Transaction Date'},
-                    {value: 'per_delivered', label: '📦 % Delivered'},
-                    {value: 'per_billed', label: '💳 % Billed'}
+                    { value: 'grand_total', label: '💵 Grand Total' },
+                    { value: 'total', label: 'Total' },
+                    { value: 'customer', label: '👤 Customer' },
+                    { value: 'customer_name', label: 'Customer Name' },
+                    { value: 'delivery_date', label: '📅 Delivery Date' },
+                    { value: 'transaction_date', label: '📅 Transaction Date' },
+                    { value: 'per_delivered', label: '📦 % Delivered' },
+                    { value: 'per_billed', label: '💳 % Billed' }
                 ]);
             } else if (doctype === 'Customer') {
                 fields = fields.concat([
-                    {value: 'customer_name', label: '👤 Customer Name'},
-                    {value: 'customer_group', label: '🏢 Customer Group'},
-                    {value: 'territory', label: '🌍 Territory'},
-                    {value: 'customer_type', label: '👥 Customer Type'},
-                    {value: 'disabled', label: '⛔ Disabled (0 or 1)'},
-                    {value: 'mobile_no', label: '📱 Mobile Number'},
-                    {value: 'email_id', label: '📧 Email'}
+                    { value: 'customer_name', label: '👤 Customer Name' },
+                    { value: 'customer_group', label: '🏢 Customer Group' },
+                    { value: 'territory', label: '🌍 Territory' },
+                    { value: 'customer_type', label: '👥 Customer Type' },
+                    { value: 'disabled', label: '⛔ Disabled (0 or 1)' },
+                    { value: 'mobile_no', label: '📱 Mobile Number' },
+                    { value: 'email_id', label: '📧 Email' }
                 ]);
             } else if (doctype === 'Lead') {
                 fields = fields.concat([
-                    {value: 'lead_name', label: '👤 Lead Name'},
-                    {value: 'company_name', label: '🏢 Company Name'},
-                    {value: 'source', label: '📢 Source'},
-                    {value: 'status', label: 'Status (Open/Converted/Replied)'},
-                    {value: 'email_id', label: '📧 Email'},
-                    {value: 'mobile_no', label: '📱 Mobile Number'}
+                    { value: 'lead_name', label: '👤 Lead Name' },
+                    { value: 'company_name', label: '🏢 Company Name' },
+                    { value: 'source', label: '📢 Source' },
+                    { value: 'status', label: 'Status (Open/Converted/Replied)' },
+                    { value: 'email_id', label: '📧 Email' },
+                    { value: 'mobile_no', label: '📱 Mobile Number' }
                 ]);
             } else if (doctype === 'Quotation') {
                 fields = fields.concat([
-                    {value: 'grand_total', label: '💵 Grand Total'},
-                    {value: 'total', label: 'Total'},
-                    {value: 'customer', label: '👤 Customer'},
-                    {value: 'customer_name', label: 'Customer Name'},
-                    {value: 'transaction_date', label: '📅 Transaction Date'},
-                    {value: 'valid_till', label: '📅 Valid Until'}
+                    { value: 'grand_total', label: '💵 Grand Total' },
+                    { value: 'total', label: 'Total' },
+                    { value: 'customer', label: '👤 Customer' },
+                    { value: 'customer_name', label: 'Customer Name' },
+                    { value: 'transaction_date', label: '📅 Transaction Date' },
+                    { value: 'valid_till', label: '📅 Valid Until' }
                 ]);
             }
         }
-        
+
         // Always add some common invoice/transaction fields if not already added
         const hasInvoiceFields = fields.some(f => f.value === 'outstanding_amount');
         if (!hasInvoiceFields) {
             fields = fields.concat([
-                {value: 'outstanding_amount', label: '💰 Outstanding Amount'},
-                {value: 'grand_total', label: '💵 Grand Total'},
-                {value: 'customer', label: '👤 Customer'},
-                {value: 'customer_name', label: 'Customer Name'}
+                { value: 'outstanding_amount', label: '💰 Outstanding Amount' },
+                { value: 'grand_total', label: '💵 Grand Total' },
+                { value: 'customer', label: '👤 Customer' },
+                { value: 'customer_name', label: 'Customer Name' }
             ]);
         }
 
@@ -193,20 +193,20 @@ erpnextwats.VisualConditionBuilder = class {
 
     update_json() {
         const rules = [];
-        
-        this.$container.find('.vcb-rule').each(function() {
+
+        this.$container.find('.vcb-rule').each(function () {
             const $rule = $(this);
             const field = $rule.find('.vcb-field').val();
             const operator = $rule.find('.vcb-operator').val();
             const value = $rule.find('.vcb-value').val();
-            
+
             if (field && value) {
-                rules.push({field, operator, value});
+                rules.push({ field, operator, value });
             }
         });
 
         this.conditions.rules = rules;
-        
+
         // Update the actual field value
         if (this.fieldname) {
             const json_value = JSON.stringify(this.conditions);
@@ -272,7 +272,7 @@ erpnextwats.VisualConditionBuilder = class {
                 }
             ],
             primary_action_label: 'Close',
-            primary_action: function() {
+            primary_action: function () {
                 dialog.hide();
             }
         });
@@ -302,7 +302,7 @@ function showDeadStockPreviewDialog(data) {
     todayHtml += '<table class="table table-bordered table-condensed">';
     todayHtml += '<thead><tr><th>#</th><th>Item Code</th><th>Item Name</th><th>Qty</th><th>Days Stagnant</th><th>Value</th></tr></thead>';
     todayHtml += '<tbody>';
-    
+
     data.today_batch.forEach((item, idx) => {
         todayHtml += `<tr>
             <td>${idx + 1}</td>
@@ -313,15 +313,15 @@ function showDeadStockPreviewDialog(data) {
             <td>${item.value ? item.value.toFixed(2) : '0.00'} د.م</td>
         </tr>`;
     });
-    
+
     todayHtml += '</tbody></table></div>';
-    
+
     let tomorrowHtml = '<div style="margin-bottom: 20px;">';
     tomorrowHtml += '<h5 style="color: #8d99a6; margin-bottom: 10px;">📦 Tomorrow\'s Batch (Preview)</h5>';
     tomorrowHtml += '<table class="table table-bordered table-condensed">';
     tomorrowHtml += '<thead><tr><th>#</th><th>Item Code</th><th>Item Name</th><th>Qty</th><th>Days Stagnant</th><th>Value</th></tr></thead>';
     tomorrowHtml += '<tbody>';
-    
+
     data.tomorrow_batch.forEach((item, idx) => {
         tomorrowHtml += `<tr>
             <td>${idx + 1}</td>
@@ -332,9 +332,9 @@ function showDeadStockPreviewDialog(data) {
             <td>${item.value ? item.value.toFixed(2) : '0.00'} د.م</td>
         </tr>`;
     });
-    
+
     tomorrowHtml += '</tbody></table></div>';
-    
+
     const html = `
         <div style="max-height: 600px; overflow-y: auto;">
             <div class="alert alert-info">
@@ -348,7 +348,7 @@ function showDeadStockPreviewDialog(data) {
             ${tomorrowHtml}
         </div>
     `;
-    
+
     const dialog = new frappe.ui.Dialog({
         title: 'Dead Stock Campaign Preview',
         fields: [
@@ -359,25 +359,27 @@ function showDeadStockPreviewDialog(data) {
             }
         ],
         primary_action_label: 'Close',
-        primary_action: function() {
+        primary_action: function () {
             dialog.hide();
         }
     });
-    
+
     dialog.show();
 }
 
 // Initialize visual builder on WhatsApp Template form
 frappe.ui.form.on('WhatsApp Template', {
-    refresh: function(frm) {
+    refresh: function (frm) {
+        erpnextwats.utils.update_trigger_statuses(frm);
+
         // Initialize visual condition builder
         if (frm.fields_dict.visual_conditions) {
             const $wrapper = frm.fields_dict.visual_conditions.$wrapper;
-            
+
             // Check if already initialized
             if (!$wrapper.find('.visual-condition-builder').length) {
                 const builder = new erpnextwats.VisualConditionBuilder($wrapper, 'visual_conditions');
-                
+
                 // Load existing conditions
                 if (frm.doc.visual_conditions) {
                     builder.load_conditions(frm.doc.visual_conditions);
@@ -386,10 +388,10 @@ frappe.ui.form.on('WhatsApp Template', {
         }
 
         // Add custom button to test conditions
-        if (frm.doc.enable_auto_send && 
-            (frm.doc.auto_send_mode === 'On Submit' || 
-             frm.doc.auto_send_mode === 'On Status Change' ||
-             frm.doc.auto_send_mode === 'Monitor Documents')) {
+        if (frm.doc.enable_auto_send &&
+            (frm.doc.auto_send_mode === 'On Submit' ||
+                frm.doc.auto_send_mode === 'On Status Change' ||
+                frm.doc.auto_send_mode === 'Monitor Documents')) {
             frm.add_custom_button('Test Conditions', () => {
                 frappe.call({
                     method: 'erpnextwats.erpnextwats.api.preview_matching_documents',
@@ -434,18 +436,51 @@ frappe.ui.form.on('WhatsApp Template', {
         }
 
         // Show/hide visual builder based on auto_send_mode
-        if (frm.doc.enable_auto_send && 
-            (frm.doc.auto_send_mode === 'On Submit' || 
-             frm.doc.auto_send_mode === 'On Status Change' ||
-             frm.doc.auto_send_mode === 'Monitor Documents')) {
+        if (frm.doc.enable_auto_send &&
+            (frm.doc.auto_send_mode === 'On Submit' ||
+                frm.doc.auto_send_mode === 'On Status Change' ||
+                frm.doc.auto_send_mode === 'Monitor Documents')) {
             frm.set_df_property('visual_conditions', 'hidden', 0);
         } else {
             frm.set_df_property('visual_conditions', 'hidden', 1);
         }
     },
 
-    auto_send_mode: function(frm) {
+    auto_send_mode: function (frm) {
         // Refresh to show/hide relevant sections
         frm.refresh();
+    },
+
+    doctype_name: function (frm) {
+        if (frm.doc.doctype_name) {
+            erpnextwats.utils.update_trigger_statuses(frm);
+        }
     }
 });
+
+// Utility functions
+erpnextwats.utils = {
+    update_trigger_statuses: function (frm) {
+        const doctype = frm.doc.doctype_name;
+        if (!doctype) return;
+
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.get_doctype_statuses',
+            args: {
+                doctype: doctype
+            },
+            callback: (r) => {
+                if (r.message) {
+                    // Combine standard and dynamic statuses
+                    const standard_statuses = ["Unpaid", "Paid", "Overdue"];
+                    const all_options = ["", ...standard_statuses, ...r.message];
+
+                    // Remove duplicates
+                    const unique_options = [...new Set(all_options)];
+
+                    frm.set_df_property('trigger_status', 'options', unique_options.join('\n'));
+                }
+            }
+        });
+    }
+};
