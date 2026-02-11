@@ -30,7 +30,6 @@
         "preview_conditions_btn",
         "matching_docs_preview",
         "condition_examples_section",
-        "condition_examples",
         "dead_stock_section",
         "items_per_day",
         "dead_stock_warehouse",
@@ -304,13 +303,6 @@
             "fieldtype": "Section Break",
             "label": "Filter Examples",
             "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Submit' || doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
-        },
-        {
-        {
-            "fieldname": "condition_examples",
-            "fieldtype": "HTML",
-            "label": "Examples",
-            "options": "<div style='padding: 15px; background: #f8f9fa; border-radius: 8px;'><h5>Filter Examples</h5><ul><li>Unpaid: outstanding_amount&gt;0</li><li>Overdue: status=Overdue</li><li>High Value: grand_total&gt;=5000</li></ul></div>"
         },
         {
             "fieldname": "anti_ban_section",
