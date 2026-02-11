@@ -65,7 +65,7 @@
             "fieldname": "activity_type",
             "fieldtype": "Select",
             "label": "Activity Type",
-            "options": "\nBulk Send Started\nBulk Send Completed\nBulk Send Failed\nAuto Send Triggered\nAuto Send Completed\nAuto Send Failed\nTemplate Created\nTemplate Updated\nTemplate Deleted\nSession Connected\nSession Disconnected\nSession Expired\nSession QR Generated\nSession Error\nMessage Sent\nMessage Failed\nMessage Received\nGateway Started\nGateway Stopped\nGateway Error\nRate Limit Hit\nRetry Attempt",
+            "options": "\nBulk Send Started\nBulk Send Completed\nBulk Send Failed\nAuto Send Triggered\nAuto Send Completed\nAuto Send Failed\nTemplate Created\nTemplate Updated\nTemplate Deleted\nSession Connected\nSession Disconnected\nSession Expired\nSession QR Generated\nSession Error\nMessage Sent\nMessage Failed\nMessage Received\nGateway Started\nGateway Stopped\nGateway Error\nRate Limit Hit\nRetry Attempt\nSystem Info",
             "reqd": 1
         },
         {
