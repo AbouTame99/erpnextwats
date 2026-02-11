@@ -11,6 +11,97 @@ from frappe.utils.pdf import get_pdf
 from frappe.utils import get_url, now_datetime, today
 from erpnext.accounts.utils import get_balance_on
 
+# ===== CORE INFRASTRUCTURE =====
+
+def proxy_to_service(method, endpoint, data=None):
+    """Proxies request to the Node.js WhatsApp gateway."""
+    url = f"http://localhost:3000/{endpoint.lstrip('/')}"
+    try:
+        if method.upper() == "POST":
+            response = requests.post(url, json=data, timeout=60)
+        else:
+            response = requests.get(url, timeout=30)
+        
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        frappe.logger().error(f"Gateway connection error: {str(e)}")
+        return {"status": "error", "message": f"Gateway error: {str(e)}"}
+
+def get_rendering_context(doc):
+    """Provides context for Jinja templates."""
+    from frappe.utils import format_date, format_datetime, format_currency, flt
+    
+    ctx = {
+        "doc": doc,
+        "frappe": frappe,
+        "format_date": format_date,
+        "format_datetime": format_datetime,
+        "format_currency": format_currency,
+        "flt": flt,
+        "today": frappe.utils.today(),
+        "now": frappe.utils.now()
+    }
+    return ctx
+
+def smart_delay(sent_count=0, failed_count=0):
+    """Adaptive delay to prevent WhatsApp account ban."""
+    # Base delay 5-15 seconds
+    base = random.randint(5, 15)
+    
+    # Scale based on failure rate
+    total = sent_count + failed_count
+    if total > 0:
+        failure_rate = failed_count / total
+        if failure_rate > 0.1: # >10% failure
+            base += random.randint(20, 60)
+            
+    # Add randomness
+    return base + random.random()
+
+def validate_gateway_and_session():
+    """Checks if gateway is up and WhatsApp is connected."""
+    try:
+        status_res = proxy_to_service("GET", "api/whatsapp/status")
+        if status_res.get("status") != "ready":
+            return {"valid": False, "error": status_res.get("message", "WhatsApp session not connected")}
+        return {"valid": True, "error": None}
+    except Exception as e:
+        return {"valid": False, "error": f"Could not connect to WhatsApp gateway: {str(e)}"}
+
+def check_status_condition(doc, status_condition):
+    """Check if document status matches the condition."""
+    # Handle special statuses
+    if status_condition == "Paid":
+        # Check if invoice/order is fully paid
+        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+            outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
+            return outstanding == 0 and getattr(doc, 'docstatus', 0) == 1
+        elif doc.doctype == "Sales Order":
+            # Check if order is fully paid (if payment tracking exists)
+            return getattr(doc, 'status', '') == 'Completed'
+    
+    elif status_condition == "Unpaid":
+        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+            outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
+            return outstanding > 0 and getattr(doc, 'docstatus', 0) == 1
+    
+    elif status_condition == "Overdue":
+        if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
+            # Check if invoice is overdue (due date in past and not paid)
+            due_date = getattr(doc, 'due_date', None)
+            if due_date:
+                from datetime import datetime
+                today_date = now_datetime().date()
+                if isinstance(due_date, str):
+                    due_date_obj = datetime.strptime(due_date, '%Y-%m-%d').date()
+                else:
+                    due_date_obj = due_date
+                return due_date_obj < today_date and frappe.utils.flt(getattr(doc, 'outstanding_amount', 0)) > 0
+    
+    # For other statuses, direct comparison
+    return getattr(doc, 'status', '') == status_condition
+
 # ===== COMPREHENSIVE LOGGING SYSTEM =====
 
 def log_whatsapp_activity(
@@ -111,7 +202,7 @@ def _log_wrapper(log_status, *args, **kwargs):
     if not activity_type and len(args) > 0:
         activity_type = args[0]
     if not activity_type:
-        activity_type = 'General Activity'
+        activity_type = ""
         
     message = kwargs.pop('message', None)
     if not message and len(args) > 1:
@@ -595,7 +686,7 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
     
     # Log successful queue
     log_success(
-        activity_type="Bulk Send Queued",
+        activity_type="Bulk Send Started",
         template=template_id,
         reference_doctype=doctype,
         reference_name=history_name,
@@ -1261,12 +1352,13 @@ def handle_auto_send(doc, method):
                     current_status = getattr(doc, 'status', None)
                     if current_status != trigger_status:
                         log_info(
-                            activity_type="Auto Send Skipped",
+                            activity_type="Auto Send Triggered",
                             status="Info",
                             template=template.name,
                             reference_doctype=doc.doctype,
                             reference_name=doc.name,
                             metadata={
+                                "action": "skipped",
                                 "reason": "status_mismatch",
                                 "current_status": current_status,
                                 "trigger_status": trigger_status
@@ -1279,12 +1371,13 @@ def handle_auto_send(doc, method):
             if visual_conditions:
                 if not check_visual_conditions(doc, visual_conditions):
                     log_info(
-                        activity_type="Auto Send Skipped",
+                        activity_type="Auto Send Triggered",
                         status="Info",
                         template=template.name,
                         reference_doctype=doc.doctype,
                         reference_name=doc.name,
                         metadata={
+                            "action": "skipped",
                             "reason": "conditions_not_met",
                             "conditions": visual_conditions
                         }
@@ -1293,12 +1386,13 @@ def handle_auto_send(doc, method):
             
             # All checks passed - send the message
             log_info(
-                activity_type="Auto Send Processing",
+                activity_type="Auto Send Triggered",
                 status="Info",
                 template=template.name,
                 reference_doctype=doc.doctype,
                 reference_name=doc.name,
                 metadata={
+                    "action": "processing",
                     "auto_send_mode": auto_send_mode,
                     "trigger_status": getattr(template, 'trigger_status', None),
                     "conditions_applied": bool(visual_conditions)
@@ -1308,7 +1402,7 @@ def handle_auto_send(doc, method):
         except Exception as e:
             # Log error with details
             log_error(
-                activity_type="Auto Send Error",
+                activity_type="Auto Send Failed",
                 error=e,
                 template=template_data.name,
                 reference_doctype=doc.doctype,
@@ -1357,11 +1451,31 @@ def build_filters_from_visual_conditions(conditions):
     if not conditions:
         return filters
     
-    for condition in conditions:
-        field = condition.field
-        operator = condition.operator
-        value = condition.value
+    # Handle both string and list/dict conditions
+    if isinstance(conditions, str):
+        try:
+            conditions_data = json.loads(conditions)
+        except:
+            return filters
+    else:
+        conditions_data = conditions
+
+    rules = conditions_data.get("rules", []) if isinstance(conditions_data, dict) else conditions_data
+    
+    if not rules or not isinstance(rules, list):
+        return filters
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+            
+        field = rule.get("field")
+        operator = rule.get("operator")
+        value = rule.get("value")
         
+        if not field or not operator:
+            continue
+
         # Convert operator to Frappe format
         operator_map = {
             "=": "=",
@@ -1391,36 +1505,6 @@ def build_filters_from_visual_conditions(conditions):
         
         filters.append([field, frappe_operator, value])
     
-    def check_status_condition(doc, status_condition):
-        """Check if document status matches the condition."""
-        # Handle special statuses
-        if status_condition == "Paid":
-            # Check if invoice/order is fully paid
-            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-                outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-                return outstanding == 0 and getattr(doc, 'docstatus', 0) == 1
-            elif doc.doctype == "Sales Order":
-                # Check if order is fully paid (if payment tracking exists)
-                return getattr(doc, 'status', '') == 'Completed'
-        
-        elif status_condition == "Unpaid":
-            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-                outstanding = frappe.utils.flt(getattr(doc, 'outstanding_amount', 0))
-                return outstanding > 0 and getattr(doc, 'docstatus', 0) == 1
-        
-        elif status_condition == "Overdue":
-            if doc.doctype in ["Sales Invoice", "Purchase Invoice"]:
-                # Check if invoice is overdue (due date in past and not paid)
-                due_date = getattr(doc, 'due_date', None)
-                if due_date:
-                    from datetime import datetime
-                    today = datetime.now().date()
-                    due_date_obj = datetime.strptime(due_date, '%Y-%m-%d').date()
-                    return due_date_obj < today and getattr(doc, 'outstanding_amount', 0) > 0
-        
-        # For other statuses, direct comparison
-        return getattr(doc, 'status', '') == status_condition
-
     return filters
 
 def check_conditions(doc, conditions):
@@ -1644,7 +1728,7 @@ def send_auto_message(doc, template_name):
             )
     except Exception as e:
         log_error(
-            activity_type="Auto Send Exception",
+            activity_type="Auto Send Failed",
             error=e,
             template=template_name,
             reference_doctype=doc.doctype,
@@ -1818,9 +1902,9 @@ def process_recurring_to_selected_customers(template_name):
         
         if not template.enable_auto_send or template.auto_send_mode != "Recurring":
             log_info(
-                activity_type="Recurring Send Skipped",
+                activity_type="Auto Send Triggered",
                 template=template_name,
-                metadata={"reason": "auto_send_not_enabled_or_wrong_mode"}
+                metadata={"action": "skipped", "reason": "auto_send_not_enabled_or_wrong_mode"}
             )
             return
         
@@ -1828,7 +1912,7 @@ def process_recurring_to_selected_customers(template_name):
         selected_customers = template.selected_customers or []
         if not selected_customers:
             log_warning(
-                "Recurring Send Skipped",
+                "",
                 "No customers selected for this template",
                 template=template_name,
                 metadata={"reason": "no_customers_selected"}
@@ -1836,9 +1920,10 @@ def process_recurring_to_selected_customers(template_name):
             return
         
         log_info(
-            activity_type="Recurring Send Started",
+            activity_type="Bulk Send Started",
             template=template_name,
             metadata={
+                "action": "recurring_send_start",
                 "customer_count": len(selected_customers),
                 "frequency": template.auto_send_frequency,
                 "cooldown_hours": template.cooldown_hours,
@@ -1868,11 +1953,11 @@ def process_recurring_to_selected_customers(template_name):
                 
                 if not phone:
                     log_warning(
-                        "Recurring Send Customer Skipped",
+                        "Retry Attempt",
                         "No valid phone number",
                         template=template_name,
                         customer=customer.name,
-                        metadata={"step": "phone_validation"}
+                        metadata={"step": "phone_validation", "action": "skipped"}
                     )
                     failed_count += 1
                     customer_result["status"] = "Skipped"
@@ -1883,10 +1968,10 @@ def process_recurring_to_selected_customers(template_name):
                 # Check customer cooldown
                 if not check_customer_cooldown(customer.name, template.name, template.cooldown_hours):
                     log_info(
-                        activity_type="Recurring Send Customer Skipped",
+                        activity_type="Auto Send Triggered",
                         template=template_name,
                         customer=customer.name,
-                        metadata={"reason": "in_cooldown_period", "cooldown_hours": template.cooldown_hours}
+                        metadata={"action": "skipped", "reason": "in_cooldown_period", "cooldown_hours": template.cooldown_hours}
                     )
                     customer_result["status"] = "Skipped"
                     customer_result["error"] = "In cooldown period"
@@ -1896,10 +1981,10 @@ def process_recurring_to_selected_customers(template_name):
                 # Check per-customer daily limit
                 if not check_customer_daily_limit(customer.name, template.name, template.max_per_customer):
                     log_info(
-                        activity_type="Recurring Send Customer Skipped",
+                        activity_type="Auto Send Triggered",
                         template=template_name,
                         customer=customer.name,
-                        metadata={"reason": "daily_limit_reached", "max_per_customer": template.max_per_customer}
+                        metadata={"action": "skipped", "reason": "daily_limit_reached", "max_per_customer": template.max_per_customer}
                     )
                     customer_result["status"] = "Skipped"
                     customer_result["error"] = "Daily limit reached"
@@ -1921,13 +2006,13 @@ def process_recurring_to_selected_customers(template_name):
                         
                         if result.get("status") == "success":
                             log_success(
-                                activity_type="Recurring Send Customer Success",
+                                activity_type="Message Sent",
                                 template=template_name,
                                 customer=customer.name,
                                 customer_phone=phone,
                                 message_content=message[:200],
                                 retry_count=attempt,
-                                metadata={"attempts_used": attempt}
+                                metadata={"attempts_used": attempt, "send_type": "recurring"}
                             )
                             success = True
                             sent_count += 1
@@ -1936,10 +2021,10 @@ def process_recurring_to_selected_customers(template_name):
                         else:
                             final_error = result.get("message", "Unknown error")
                             log_warning(
-                                "Recurring Send Customer Retry",
+                                "Retry Attempt",
                                 f"Attempt {attempt} failed: {final_error}",
                                 retry_count=attempt,
-                                metadata={"attempt": attempt}
+                                metadata={"attempt": attempt, "send_type": "recurring"}
                             )
                             
                             if attempt < 3:
@@ -1949,13 +2034,13 @@ def process_recurring_to_selected_customers(template_name):
                     except Exception as e:
                         final_error = str(e)
                         log_error(
-                            activity_type="Recurring Send Customer Exception",
+                            activity_type="Message Failed",
                             error=e,
                             template=template_name,
                             customer=customer.name,
                             customer_phone=phone,
                             retry_count=attempt,
-                            metadata={"attempt": attempt}
+                            metadata={"attempt": attempt, "send_type": "recurring"}
                         )
                         if attempt < 3:
                             delay = smart_delay(sent_count, failed_count)
@@ -1966,13 +2051,13 @@ def process_recurring_to_selected_customers(template_name):
                     customer_result["status"] = "Failed"
                     customer_result["error"] = final_error or "Failed after 3 attempts"
                     log_error(
-                        activity_type="Recurring Send Customer Failed",
+                        activity_type="Message Failed",
                         error=final_error or "Failed after 3 attempts",
                         template=template_name,
                         customer=customer.name,
                         customer_phone=phone,
                         retry_count=3,
-                        metadata={"total_attempts": 3}
+                        metadata={"total_attempts": 3, "send_type": "recurring"}
                     )
                 
                 customer_results.append(customer_result)
@@ -1981,9 +2066,9 @@ def process_recurring_to_selected_customers(template_name):
                 if idx < len(selected_customers) - 1:
                     delay = smart_delay(sent_count, failed_count)
                     log_info(
-                        activity_type="Recurring Send Delay",
+                        activity_type="Retry Attempt",
                         template=template_name,
-                        metadata={"delay_seconds": delay, "customer_index": idx + 1, "total": len(selected_customers)}
+                        metadata={"delay_seconds": delay, "customer_index": idx + 1, "total": len(selected_customers), "action": "recurring_delay"}
                     )
                     time.sleep(delay)
                     
@@ -1993,21 +2078,22 @@ def process_recurring_to_selected_customers(template_name):
                 customer_result["error"] = str(e)
                 customer_results.append(customer_result)
                 log_error(
-                    activity_type="Recurring Send Customer Error",
+                    activity_type="Message Failed",
                     error=e,
                     template=template_name,
                     customer=customer_row.customer,
-                    metadata={"step": "processing"}
+                    metadata={"step": "processing", "error_type": "Recurring Processing Error"}
                 )
                 continue
         
         duration_ms = int((time.time() - start_time) * 1000)
         
         log_success(
-            activity_type="Recurring Send Completed",
+            activity_type="Bulk Send Completed",
             template=template_name,
             duration_ms=duration_ms,
             metadata={
+                "action": "recurring_send_complete",
                 "sent": sent_count,
                 "failed": failed_count,
                 "total": len(selected_customers),
@@ -2019,7 +2105,7 @@ def process_recurring_to_selected_customers(template_name):
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
         log_error(
-            activity_type="Recurring Send Failed",
+            activity_type="Bulk Send Failed",
             error=e,
             template=template_name,
             duration_ms=duration_ms,
@@ -2411,10 +2497,10 @@ def process_monitored_documents(frequency):
                 process_single_monitored_template(template)
             except Exception as e:
                 log_error(
-                    activity_type="Monitor Documents Error",
+                    activity_type="Auto Send Failed",
                     error=e,
                     template=template_data.name,
-                    metadata={"frequency": frequency}
+                    metadata={"frequency": frequency, "error_type": "Monitored Template Processing Failure"}
                 )
                 continue
                 
@@ -2430,9 +2516,10 @@ def process_single_monitored_template(template):
     doctype = template.doctype_name
     
     log_info(
-        activity_type="Monitor Documents Check Started",
+        activity_type="Auto Send Triggered",
         template=template.name,
         metadata={
+            "action": "monitor_check_start",
             "doctype": doctype,
             "frequency": template.monitoring_frequency,
             "trigger_status": template.trigger_status
@@ -2453,18 +2540,18 @@ def process_single_monitored_template(template):
         docs = frappe.get_all(doctype, filters=filters, fields=["name"])
     except Exception as e:
         log_error(
-            activity_type="Monitor Documents Query Error",
+            activity_type="Auto Send Failed",
             error=e,
             template=template.name,
-            metadata={"doctype": doctype, "filters": filters}
+            metadata={"doctype": doctype, "filters": filters, "error_type": "Monitor Query Error"}
         )
         return
     
     if not docs:
         log_info(
-            activity_type="Monitor Documents No Matches",
+            activity_type="Auto Send Triggered",
             template=template.name,
-            metadata={"doctype": doctype, "reason": "no_submitted_docs"}
+            metadata={"doctype": doctype, "action": "no_matches", "reason": "no_submitted_docs"}
         )
         return
     
@@ -2503,19 +2590,21 @@ def process_single_monitored_template(template):
                 
         except Exception as e:
             log_error(
-                activity_type="Monitor Documents Processing Error",
+                activity_type="Auto Send Failed",
                 error=e,
                 template=template.name,
                 reference_doctype=doctype,
-                reference_name=doc_data.name
+                reference_name=doc_data.name,
+                metadata={"error_type": "Monitor Processing Error"}
             )
             failed_count += 1
             continue
     
     log_success(
-        activity_type="Monitor Documents Check Completed",
+        activity_type="Auto Send Completed",
         template=template.name,
         metadata={
+            "action": "monitor_check_complete",
             "checked": len(docs),
             "sent": sent_count,
             "skipped": skipped_count,
@@ -2538,7 +2627,7 @@ def was_recently_sent(doc, template_name, hours=24):
                 "template": template_name,
                 "reference_doctype": doc.doctype,
                 "reference_name": doc.name,
-                "activity_type": ["in", ["Auto Send Completed", "Monitor Documents Sent"]],
+                "activity_type": ["in", ["Auto Send Completed"]],
                 "activity_timestamp": [">=", add_to_date(now_datetime(), hours=-hours)]
             },
             "name"
@@ -2599,18 +2688,19 @@ def process_dead_stock_daily():
                 
                 if time_diff <= 5:  # Within 5 minutes window
                     log_info(
-                        activity_type="Dead Stock Campaign Starting",
+                        activity_type="Bulk Send Started",
                         template=template.name,
-                        metadata={"scheduled_time": str(scheduled_time), "current_time": str(current_time)}
+                        metadata={"action": "dead_stock_campaign_start", "scheduled_time": str(scheduled_time), "current_time": str(current_time)}
                     )
                     
                     send_dead_stock_campaign(template)
                     
             except Exception as e:
                 log_error(
-                    activity_type="Dead Stock Campaign Error",
+                    activity_type="Bulk Send Failed",
                     error=e,
-                    template=template_data.name
+                    template=template_data.name,
+                    metadata={"error_type": "Dead Stock Campaign Trigger Failure"}
                 )
                 continue
                 
@@ -2669,10 +2759,10 @@ def get_dead_stock_items(template):
         return items
     except Exception as e:
         log_error(
-            activity_type="Dead Stock Query Error",
+            activity_type="Bulk Send Failed",
             error=e,
             template=template.name,
-            metadata={"warehouse": warehouse, "min_days": min_days}
+            metadata={"warehouse": warehouse, "min_days": min_days, "error_type": "Dead Stock Query Error"}
         )
         return []
 
@@ -2720,9 +2810,10 @@ def get_todays_dead_stock_batch(template, is_preview=False):
         frappe.db.commit()
     
     log_info(
-        activity_type="Dead Stock Batch Prepared",
+        activity_type="",
         template=template.name,
         metadata={
+            "action": "dead_stock_batch_prepared",
             "total_items": len(all_items),
             "batch_size": len(today_items),
             "last_index": last_index,
@@ -2759,8 +2850,9 @@ def get_all_customers_with_phones():
         
     except Exception as e:
         log_error(
-            activity_type="Customer Query Error",
-            error=e
+            activity_type="Bulk Send Failed",
+            error=e,
+            metadata={"error_type": "Dead Stock Customer Query Error"}
         )
         return []
 
@@ -2853,9 +2945,10 @@ def send_dead_stock_campaign(template):
         return
     
     log_info(
-        activity_type="Dead Stock Campaign Starting",
+        activity_type="Bulk Send Started",
         template=template.name,
         metadata={
+            "action": "dead_stock_campaign_process_start",
             "items_to_send": len(today_items),
             "total_customers": len(customers),
             "total_messages": len(today_items) * len(customers)
@@ -2878,10 +2971,10 @@ def send_dead_stock_campaign(template):
             if not media:
                 items_without_images.append(item_code)
                 log_info(
-                    activity_type="Dead Stock Item No Image",
+                    activity_type="",
                     template=template.name,
                     reference_name=item_code,
-                    metadata={"item_name": item_data.item_name}
+                    metadata={"action": "dead_stock_item_no_image", "item_name": item_data.item_name}
                 )
         
         # Process each customer
@@ -2920,12 +3013,13 @@ def send_dead_stock_campaign(template):
                             total_sent += 1
                             
                             log_success(
-                                activity_type="Dead Stock Message Sent",
+                                activity_type="Message Sent",
                                 template=template.name,
                                 customer=customer.name,
                                 customer_phone=customer.mobile_no,
                                 reference_name=item_code,
-                                retry_count=attempt
+                                retry_count=attempt,
+                                metadata={"send_type": "dead_stock"}
                             )
                             break
                         else:
@@ -2944,13 +3038,14 @@ def send_dead_stock_campaign(template):
                 if not success:
                     total_failed += 1
                     log_error(
-                        activity_type="Dead Stock Message Failed",
+                        activity_type="Message Failed",
                         error=final_error or "Failed after 3 attempts",
                         template=template.name,
                         customer=customer.name,
                         customer_phone=customer.mobile_no,
                         reference_name=item_code,
-                        retry_count=3
+                        retry_count=3,
+                        metadata={"total_attempts": 3, "send_type": "dead_stock"}
                     )
                 
                 # Anti-ban delay between customers
@@ -2960,11 +3055,12 @@ def send_dead_stock_campaign(template):
             except Exception as e:
                 total_failed += 1
                 log_error(
-                    activity_type="Dead Stock Customer Error",
+                    activity_type="Message Failed",
                     error=e,
                     template=template.name,
                     customer=customer.name,
-                    reference_name=item_code
+                    reference_name=item_code,
+                    metadata={"error_type": "Dead Stock Customer Processing Error"}
                 )
                 continue
         
@@ -2973,9 +3069,10 @@ def send_dead_stock_campaign(template):
     
     # Log campaign completion
     log_success(
-        activity_type="Dead Stock Campaign Completed",
+        activity_type="Bulk Send Completed",
         template=template.name,
         metadata={
+            "action": "dead_stock_campaign_complete",
             "total_sent": total_sent,
             "total_failed": total_failed,
             "items_processed": len(today_items),
@@ -2987,13 +3084,14 @@ def send_dead_stock_campaign(template):
     # Log items without images to WhatsApp Activity Log
     if items_without_images:
         log_warning(
-            "Dead Stock Items Without Images",
+            "",
             f"{len(items_without_images)} items sent without images",
             template=template.name,
             metadata={
                 "items_without_images": items_without_images,
                 "total_items": len(today_items),
-                "affected_items_count": len(items_without_images)
+                "affected_items_count": len(items_without_images),
+                "action": "dead_stock_missing_images"
             }
         )
 
