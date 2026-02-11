@@ -40,7 +40,8 @@ add_to_apps_screen = [
 
 # include js in page
 page_js = {
-    "bulk-whatsapp": "erpnextwats/page/bulk_whatsapp/bulk_whatsapp.js"
+    "bulk-whatsapp": "erpnextwats/page/bulk_whatsapp/bulk_whatsapp.js",
+    "whatsapp-dashboard": "erpnextwats/page/whatsapp_dashboard/whatsapp_dashboard.js"
 }
 
 # include js in doctype views
@@ -144,7 +145,9 @@ doctype_list_js = {
 
 doc_events = {
 	"*": {
-		"on_update": "erpnextwats.erpnextwats.api.handle_auto_send",
+		# Only use on_submit to avoid duplicate sends
+		# on_update fires on save, on_submit fires on submit
+		# For submittable documents, we only want to send once on submit
 		"on_submit": "erpnextwats.erpnextwats.api.handle_auto_send"
 	}
 }

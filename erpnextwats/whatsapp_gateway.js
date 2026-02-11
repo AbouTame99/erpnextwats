@@ -9,6 +9,44 @@ const port = 3000;
 // SHARED SESSION ID - All users share this single session
 const SHARED_SESSION_ID = 'shared_company_session';
 
+// Logging setup
+const LOG_DIR = '/cloudclusters/erpnext/frappe-bench/logs/whatsapp_gateway';
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+
+const LOG_FILE = path.join(LOG_DIR, `gateway_${new Date().toISOString().split('T')[0]}.log`);
+
+function logEvent(type, status, details = {}) {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+        timestamp,
+        type,
+        status,
+        ...details
+    };
+    
+    // Write to log file
+    try {
+        fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + '\n');
+    } catch (e) {
+        console.error(`[LOG ERROR] Failed to write log: ${e.message}`);
+    }
+    
+    // Also console log
+    const detailStr = Object.keys(details).length > 0 ? JSON.stringify(details) : '';
+    console.log(`[${type}] ${status}${detailStr ? ' - ' + detailStr : ''}`);
+    
+    return logEntry;
+}
+
+function logError(type, error, details = {}) {
+    const errorDetails = {
+        message: error.message || String(error),
+        stack: error.stack,
+        ...details
+    };
+    logEvent(type, 'Error', errorDetails);
+}
+
 // CORS headers to allow connections
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -46,6 +84,10 @@ class WhatsAppSession {
         if (this.status === 'initializing' || this.status === 'ready') return;
 
         console.log(`[SHARED SESSION] Initializing...`);
+        logEvent('Session', 'Initializing', {
+            sessionId: this.sessionId,
+            timestamp: new Date().toISOString()
+        });
         this.status = 'initializing';
 
         this.client = new Client({
@@ -78,6 +120,10 @@ class WhatsAppSession {
             console.log(`[SHARED SESSION] QR Received`);
             this.qrCode = await qrcode.toDataURL(qr);
             this.status = 'qr_ready';
+            logEvent('Session', 'QR Generated', {
+                sessionId: this.sessionId,
+                timestamp: new Date().toISOString()
+            });
         });
 
         this.client.on('ready', async () => {
@@ -89,20 +135,32 @@ class WhatsAppSession {
             messageCount = 0;
             
             // Get connected number info
+            let phoneNumber = null;
             try {
                 this.info = await this.client.info;
-                console.log(`[SHARED SESSION] Connected as: ${this.info.wid.user}`);
+                phoneNumber = this.info.wid.user;
+                console.log(`[SHARED SESSION] Connected as: ${phoneNumber}`);
             } catch (e) {
                 console.log(`[SHARED SESSION] Could not get info: ${e.message}`);
             }
             
             console.log(`[SHARED SESSION] Session connected at: ${this.connectedAt.toISOString()}`);
+            
+            logEvent('Session', 'Connected', {
+                sessionId: this.sessionId,
+                phoneNumber: phoneNumber,
+                connectedAt: this.connectedAt.toISOString()
+            });
         });
 
         this.client.on('auth_failure', (msg) => {
             console.error(`[SHARED SESSION] Auth Fail:`, msg);
             this.status = 'auth_failure';
             this.qrCode = null;
+            logEvent('Session', 'Auth Failure', {
+                sessionId: this.sessionId,
+                error: msg
+            });
         });
 
         this.client.on('loading_screen', (percent, message) => {
@@ -114,12 +172,23 @@ class WhatsAppSession {
             this.status = 'disconnected';
             this.qrCode = null;
             
+            logEvent('Session', 'Disconnected', {
+                sessionId: this.sessionId,
+                reason: reason,
+                duration: this.connectedAt ? Math.floor((new Date() - this.connectedAt) / (1000 * 60 * 60)) + ' hours' : 'N/A',
+                totalMessages: messageCount
+            });
+            
             // If disconnected due to logout or expiration, clean up session folder
             if (reason === 'LOGOUT' || reason === 'NAVIGATION') {
                 const sessDir = path.join(BASE_AUTH_DIR, `session-${this.sessionId}`);
                 if (fs.existsSync(sessDir)) {
                     console.log(`[SHARED SESSION] Cleaning up session folder due to: ${reason}`);
                     fs.rmSync(sessDir, { recursive: true, force: true });
+                    logEvent('Session', 'Folder Cleaned', {
+                        sessionId: this.sessionId,
+                        reason: reason
+                    });
                 }
             }
             
@@ -132,6 +201,10 @@ class WhatsAppSession {
 
         await this.client.initialize().catch(e => {
             console.error(`[SHARED SESSION] Init Error:`, e.message);
+            logError('Session', e, {
+                sessionId: this.sessionId,
+                step: 'initialize'
+            });
             this.status = 'error';
         });
     }
@@ -140,20 +213,46 @@ class WhatsAppSession {
         if (!this.client || this.status !== 'ready') throw new Error('Session not ready');
 
         const chatId = to.includes('@') ? to : `${to.replace(/[^0-9]/g, '')}@c.us`;
-
+        const startTime = Date.now();
+        
         let result;
-        if (mediaData && mediaData.data) {
-            const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
-            result = await this.client.sendMessage(chatId, media, { caption: message });
-        } else {
-            result = await this.client.sendMessage(chatId, message);
+        let hasMedia = mediaData && mediaData.data;
+
+        try {
+            if (hasMedia) {
+                const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
+                result = await this.client.sendMessage(chatId, media, { caption: message });
+            } else {
+                result = await this.client.sendMessage(chatId, message);
+            }
+            
+            // Update activity tracking
+            lastActivityTime = new Date();
+            messageCount++;
+            
+            const duration = Date.now() - startTime;
+            
+            logEvent('Message', 'Sent', {
+                sessionId: this.sessionId,
+                to: chatId,
+                hasMedia: hasMedia,
+                durationMs: duration,
+                messageCount: messageCount,
+                messageId: result ? result.id._serialized : null
+            });
+            
+            return result;
+        } catch (error) {
+            const duration = Date.now() - startTime;
+            logError('Message', error, {
+                sessionId: this.sessionId,
+                to: chatId,
+                hasMedia: hasMedia,
+                durationMs: duration,
+                messagePreview: message.substring(0, 50) + '...'
+            });
+            throw error;
         }
-        
-        // Update activity tracking
-        lastActivityTime = new Date();
-        messageCount++;
-        
-        return result;
     }
 
     async disconnect() {
@@ -234,8 +333,21 @@ app.get('/api/whatsapp/status', (req, res) => {
 // Send message
 app.post('/api/whatsapp/send', async (req, res) => {
     const { to, message, media } = req.body;
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    logEvent('API', 'Send Request', {
+        requestId,
+        to: to ? to.replace(/[^0-9]/g, '').substr(-4) : 'N/A', // Log last 4 digits only for privacy
+        hasMedia: !!media,
+        sessionStatus: sharedSession ? sharedSession.status : 'disconnected'
+    });
 
     if (!sharedSession || sharedSession.status !== 'ready') {
+        logEvent('API', 'Send Failed', {
+            requestId,
+            reason: 'Session not ready',
+            sessionStatus: sharedSession ? sharedSession.status : 'disconnected'
+        });
         return res.status(400).json({ 
             error: 'Shared session not ready',
             status: sharedSession ? sharedSession.status : 'disconnected'
@@ -244,8 +356,16 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
     try {
         await sharedSession.sendMessage(to, message, media);
+        logEvent('API', 'Send Success', {
+            requestId,
+            duration: 'completed'
+        });
         res.json({ status: 'success' });
     } catch (error) {
+        logError('API', error, {
+            requestId,
+            endpoint: '/api/whatsapp/send'
+        });
         console.error(`[API] Send failed:`, error.message);
         res.status(500).json({ status: 'error', message: error.message });
     }
@@ -253,10 +373,20 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
 // Disconnect
 app.post('/api/whatsapp/disconnect', async (req, res) => {
+    logEvent('API', 'Disconnect Request', {
+        sessionStatus: sharedSession ? sharedSession.status : 'disconnected',
+        connectedSince: sharedSession ? sharedSession.connectedAt : null
+    });
+    
     if (sharedSession) {
         await sharedSession.disconnect();
         sharedSession = null;
     }
+    
+    logEvent('Session', 'Manual Disconnect', {
+        timestamp: new Date().toISOString()
+    });
+    
     res.json({ status: 'disconnected', message: 'Shared session disconnected' });
 });
 

@@ -6,9 +6,256 @@ import random
 import re
 import time
 import urllib.parse
+import traceback
 from frappe.utils.pdf import get_pdf
-from frappe.utils import get_url, now_datetime
+from frappe.utils import get_url, now_datetime, today
 from erpnext.accounts.utils import get_balance_on
+
+# ===== COMPREHENSIVE LOGGING SYSTEM =====
+
+def log_whatsapp_activity(
+    activity_type,
+    status="Info",
+    user=None,
+    session_id=None,
+    phone_number=None,
+    reference_doctype=None,
+    reference_name=None,
+    template=None,
+    customer=None,
+    customer_phone=None,
+    message_content=None,
+    error_details=None,
+    duration_ms=None,
+    retry_count=None,
+    metadata=None
+):
+    """
+    Comprehensive logging utility for all WhatsApp activities.
+    
+    Args:
+        activity_type: Type of activity (e.g., 'Bulk Send Started', 'Message Sent')
+        status: Success/Failed/Warning/Info/Error
+        user: User who performed the action
+        session_id: WhatsApp session ID
+        phone_number: Connected phone number
+        reference_doctype: Related DocType
+        reference_name: Related document name
+        template: WhatsApp Template used
+        customer: Customer name/code
+        customer_phone: Customer phone number
+        message_content: Message content (truncated for privacy)
+        error_details: Error message or details
+        duration_ms: Duration in milliseconds
+        retry_count: Number of retry attempts
+        metadata: Additional JSON metadata
+    """
+    try:
+        log_entry = frappe.get_doc({
+            "doctype": "WhatsApp Activity Log",
+            "activity_type": activity_type,
+            "status": status,
+            "user": user or frappe.session.user,
+            "user_name": frappe.get_value("User", user or frappe.session.user, "full_name") if frappe.session.user else None,
+            "session_id": session_id or "shared_company_session",
+            "phone_number": phone_number,
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "template": template,
+            "customer": customer,
+            "customer_phone": customer_phone,
+            "message_content": (message_content[:1000] + "...") if message_content and len(message_content) > 1000 else message_content,
+            "error_details": error_details,
+            "duration_ms": duration_ms,
+            "retry_count": retry_count,
+            "metadata_json": json.dumps(metadata) if metadata else None,
+            "ip_address": frappe.request.environ.get("REMOTE_ADDR") if frappe.request else None,
+            "user_agent": frappe.request.environ.get("HTTP_USER_AGENT")[:200] if frappe.request and frappe.request.environ.get("HTTP_USER_AGENT") else None
+        })
+        log_entry.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception as e:
+        # If logging fails, at least log to console
+        print(f"[LOGGING ERROR] Failed to create log entry: {str(e)}")
+        frappe.logger().error(f"Failed to create WhatsApp activity log: {str(e)}")
+
+def log_error(activity_type, error, user=None, **kwargs):
+    """Convenience function for logging errors with stack trace"""
+    error_msg = str(error)
+    stack = traceback.format_exc()
+    log_whatsapp_activity(
+        activity_type=activity_type,
+        status="Error",
+        user=user,
+        error_details=error_msg,
+        stack_trace=stack,
+        **kwargs
+    )
+
+def log_success(activity_type, user=None, **kwargs):
+    """Convenience function for logging successful operations"""
+    log_whatsapp_activity(
+        activity_type=activity_type,
+        status="Success",
+        user=user,
+        **kwargs
+    )
+
+def log_warning(activity_type, warning_msg, user=None, **kwargs):
+    """Convenience function for logging warnings"""
+    log_whatsapp_activity(
+        activity_type=activity_type,
+        status="Warning",
+        user=user,
+        error_details=warning_msg,
+        **kwargs
+    )
+
+def log_info(activity_type, user=None, **kwargs):
+    """Convenience function for logging info"""
+    log_whatsapp_activity(
+        activity_type=activity_type,
+        status="Info",
+        user=user,
+        **kwargs
+    )
+
+@frappe.whitelist()
+def get_whatsapp_logs(
+    activity_type=None,
+    category=None,
+    status=None,
+    user=None,
+    customer=None,
+    template=None,
+    date_from=None,
+    date_to=None,
+    limit=100,
+    offset=0
+):
+    """
+    Query WhatsApp activity logs with filters.
+    
+    Returns filtered logs for dashboard/reports.
+    """
+    try:
+        filters = {}
+        
+        if activity_type:
+            filters["activity_type"] = activity_type
+        if category:
+            filters["activity_category"] = category
+        if status:
+            filters["status"] = status
+        if user:
+            filters["user"] = user
+        if customer:
+            filters["customer"] = customer
+        if template:
+            filters["template"] = template
+        if date_from:
+            filters["activity_date"] = [">=", date_from]
+        if date_to:
+            filters["activity_date"] = ["<=", date_to]
+        
+        logs = frappe.get_all(
+            "WhatsApp Activity Log",
+            filters=filters,
+            fields=[
+                "name", "activity_timestamp", "activity_date", "activity_type",
+                "activity_category", "status", "user", "user_name", "customer",
+                "customer_phone", "template", "duration_ms", "retry_count"
+            ],
+            order_by="activity_timestamp desc",
+            limit=limit,
+            limit_start=offset
+        )
+        
+        # Get total count
+        total = frappe.db.count("WhatsApp Activity Log", filters=filters)
+        
+        return {
+            "status": "success",
+            "logs": logs,
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def get_whatsapp_dashboard_stats():
+    """
+    Get real-time dashboard statistics.
+    
+    Returns summary metrics for the dashboard.
+    """
+    try:
+        today_date = today()
+        
+        # Today's stats
+        today_stats = frappe.db.sql("""
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'Success' THEN 1 ELSE 0 END) as success,
+                SUM(CASE WHEN status = 'Failed' THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status = 'Error' THEN 1 ELSE 0 END) as errors,
+                SUM(CASE WHEN activity_category = 'Message' THEN 1 ELSE 0 END) as messages,
+                SUM(CASE WHEN activity_category = 'Bulk' THEN 1 ELSE 0 END) as bulk_sends
+            FROM `tabWhatsApp Activity Log`
+            WHERE activity_date = %s
+        """, (today_date,), as_dict=True)[0]
+        
+        # Last 7 days trend
+        weekly_stats = frappe.db.sql("""
+            SELECT 
+                activity_date,
+                COUNT(*) as count,
+                SUM(CASE WHEN status = 'Success' THEN 1 ELSE 0 END) as success
+            FROM `tabWhatsApp Activity Log`
+            WHERE activity_date >= DATE_SUB(%s, INTERVAL 7 DAY)
+            GROUP BY activity_date
+            ORDER BY activity_date DESC
+        """, (today_date,), as_dict=True)
+        
+        # Recent errors (last 24 hours)
+        recent_errors = frappe.db.sql("""
+            SELECT activity_type, error_details, activity_timestamp, user
+            FROM `tabWhatsApp Activity Log`
+            WHERE status = 'Error'
+            AND activity_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+            ORDER BY activity_timestamp DESC
+            LIMIT 10
+        """, as_dict=True)
+        
+        # Session status (latest)
+        latest_session = frappe.db.sql("""
+            SELECT activity_type, status, activity_timestamp
+            FROM `tabWhatsApp Activity Log`
+            WHERE activity_category = 'Session'
+            ORDER BY activity_timestamp DESC
+            LIMIT 1
+        """, as_dict=True)
+        
+        return {
+            "status": "success",
+            "today": {
+                "total": today_stats.total or 0,
+                "success": today_stats.success or 0,
+                "failed": today_stats.failed or 0,
+                "errors": today_stats.errors or 0,
+                "messages": today_stats.messages or 0,
+                "bulk_sends": today_stats.bulk_sends or 0
+            },
+            "weekly_trend": weekly_stats,
+            "recent_errors": recent_errors,
+            "latest_session": latest_session[0] if latest_session else None
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# ===== END LOGGING SYSTEM =====
 
 @frappe.whitelist()
 def proxy_to_service(method, path, data=None):
@@ -444,7 +691,37 @@ def send_via_template(docname, doctype, template_id, phone=None):
         "media": media
     }
 
-    return proxy_to_service("POST", "api/whatsapp/send", data)
+    # Send message and log result
+    start_time = time.time()
+    result = proxy_to_service("POST", "api/whatsapp/send", data)
+    duration_ms = int((time.time() - start_time) * 1000)
+    
+    # Log the message send attempt
+    if result.get("status") == "success":
+        log_success(
+            activity_type="Message Sent",
+            template=template_id,
+            customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+            customer_phone=recipient,
+            message_content=message[:200],
+            duration_ms=duration_ms,
+            reference_doctype=doctype,
+            reference_name=docname
+        )
+    else:
+        log_error(
+            activity_type="Message Failed",
+            error=result.get("message", "Unknown error"),
+            template=template_id,
+            customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+            customer_phone=recipient,
+            message_content=message[:200],
+            duration_ms=duration_ms,
+            reference_doctype=doctype,
+            reference_name=docname
+        )
+    
+    return result
 
 @frappe.whitelist()
 def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=None, delay_seconds=3, max_per_hour=50):
@@ -472,6 +749,18 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
     frappe.logger().info(f"[BULK SEND] DocType: {doctype}")
     frappe.logger().info(f"[BULK SEND] Customer List: {customer_list}")
     frappe.logger().info(f"[BULK SEND] User: {frappe.session.user}")
+    
+    # Log bulk send start
+    log_info(
+        activity_type="Bulk Send Started",
+        template=template_id,
+        reference_doctype=doctype,
+        metadata={
+            "customer_list": customer_list,
+            "filters": filters,
+            "max_per_hour": max_per_hour
+        }
+    )
     
     # STEP 1: Validate gateway and WhatsApp session
     frappe.logger().info("[BULK SEND] Validating gateway and session...")
@@ -590,6 +879,18 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
         queue='long',
         job_name=f"whatsapp_bulk_{history_name}",
         timeout=7200  # 2 hour timeout
+    )
+    
+    # Log successful queue
+    log_success(
+        activity_type="Bulk Send Queued",
+        template=template_id,
+        reference_doctype=doctype,
+        reference_name=history_name,
+        metadata={
+            "total_recipients": len(docs),
+            "history_name": history_name
+        }
     )
     
     return {
@@ -864,6 +1165,23 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
     log_message(f"Skipped: {skipped_count}")
     log_message(f"Duration: {(end_time - history.started_at).total_seconds() // 60} minutes")
     log_message("=" * 80)
+    
+    # Log completion to activity log
+    duration_seconds = (end_time - history.started_at).total_seconds()
+    log_success(
+        activity_type="Bulk Send Completed",
+        template=template_id,
+        reference_doctype=doctype,
+        reference_name=history_name,
+        duration_ms=int(duration_seconds * 1000),
+        metadata={
+            "sent": sent_count,
+            "failed": failed_count,
+            "skipped": skipped_count,
+            "total": len(doc_names),
+            "success_rate": round((sent_count / len(doc_names) * 100), 2) if doc_names else 0
+        }
+    )
     
     return {
         "status": "completed",
@@ -1155,6 +1473,10 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
 
 def handle_auto_send(doc, method):
     """Handles automatic sending of WhatsApp messages based on template settings."""
+    # Only process on_submit events - ignore on_update/on_save
+    if method != "on_submit":
+        return
+    
     if not doc or not hasattr(doc, 'doctype'):
         return
     
@@ -1190,38 +1512,100 @@ def handle_auto_send(doc, method):
     if not templates:
         return
     
+    # Log auto-send triggered (only on_submit)
+    log_info(
+        activity_type="Auto Send Triggered",
+        status="Info",
+        reference_doctype=doc.doctype,
+        reference_name=doc.name,
+        metadata={
+            "trigger_method": "on_submit",
+            "template_count": len(templates),
+            "doc_status": doc.status if hasattr(doc, 'status') else None,
+            "docstatus": doc.docstatus if hasattr(doc, 'docstatus') else None
+        }
+    )
+    
     for template_data in templates:
         try:
             template = frappe.get_doc("WhatsApp Template", template_data.name)
             
             # Check conditions if specified
             if not check_document_conditions(doc, template):
+                log_info(
+                    activity_type="Auto Send Skipped",
+                    status="Info",
+                    template=template.name,
+                    reference_doctype=doc.doctype,
+                    reference_name=doc.name,
+                    metadata={"reason": "conditions_not_met"}
+                )
                 continue
             
             # Handle different timing options
             if template.auto_send_timing == "Immediate":
                 # Send immediately
+                log_info(
+                    activity_type="Auto Send Immediate",
+                    status="Info",
+                    template=template.name,
+                    reference_doctype=doc.doctype,
+                    reference_name=doc.name
+                )
                 send_auto_message(doc, template.name)
                 
             elif template.auto_send_timing == "On Status Change":
                 # Check if current status matches trigger status
                 if template.auto_send_status:
                     if check_status_condition(doc, template.auto_send_status):
+                        log_info(
+                            activity_type="Auto Send Status Change",
+                            status="Info",
+                            template=template.name,
+                            reference_doctype=doc.doctype,
+                            reference_name=doc.name,
+                            metadata={"trigger_status": template.auto_send_status}
+                        )
                         send_auto_message(doc, template.name)
             
             elif template.auto_send_timing in ["After Minutes", "After Hours", "After Days"]:
                 # Schedule delayed send
                 if template.auto_send_delay:
+                    log_info(
+                        activity_type="Auto Send Scheduled",
+                        status="Info",
+                        template=template.name,
+                        reference_doctype=doc.doctype,
+                        reference_name=doc.name,
+                        metadata={
+                            "timing": template.auto_send_timing,
+                            "delay": template.auto_send_delay
+                        }
+                    )
                     schedule_delayed_send(doc, template.name, template.auto_send_timing, template.auto_send_delay)
             
             elif template.auto_send_timing in ["Every Minute", "Every Hour", "Every Day", "Every Week", "Every Month"]:
                 # Recurring sends are handled by scheduler, but we can trigger on document creation/update
                 # Check if conditions are met for immediate send
                 if check_document_conditions(doc, template):
+                    log_info(
+                        activity_type="Auto Send Recurring",
+                        status="Info",
+                        template=template.name,
+                        reference_doctype=doc.doctype,
+                        reference_name=doc.name,
+                        metadata={"frequency": template.auto_send_timing}
+                    )
                     send_auto_message(doc, template.name)
         except Exception as e:
-            # Log error but don't break the migration
-            frappe.logger().debug(f"Error processing auto-send template {template_data.name}: {str(e)}")
+            # Log error with details
+            log_error(
+                activity_type="Auto Send Error",
+                error=e,
+                template=template_data.name,
+                reference_doctype=doc.doctype,
+                reference_name=doc.name
+            )
             continue
 
 def check_status_condition(doc, status_condition):
@@ -1346,14 +1730,42 @@ def check_document_conditions(doc, template):
 
 def send_auto_message(doc, template_name):
     """Send WhatsApp message automatically."""
+    start_time = time.time()
     try:
         result = send_via_template(doc.name, doc.doctype, template_name)
+        duration_ms = int((time.time() - start_time) * 1000)
+        
         if result.get('status') == 'success':
-            frappe.logger().info(f"Auto-sent WhatsApp message for {doc.doctype} {doc.name} using template {template_name}")
+            log_success(
+                activity_type="Auto Send Completed",
+                template=template_name,
+                reference_doctype=doc.doctype,
+                reference_name=doc.name,
+                customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+                duration_ms=duration_ms,
+                metadata={
+                    "message_status": "sent",
+                    "auto_send": True
+                }
+            )
         else:
-            frappe.logger().error(f"Failed to auto-send WhatsApp: {result.get('message', 'Unknown error')}")
+            log_error(
+                activity_type="Auto Send Failed",
+                error=result.get('message', 'Unknown error'),
+                template=template_name,
+                reference_doctype=doc.doctype,
+                reference_name=doc.name,
+                customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+                duration_ms=duration_ms
+            )
     except Exception as e:
-        frappe.logger().error(f"Error in auto-send WhatsApp: {str(e)}")
+        log_error(
+            activity_type="Auto Send Exception",
+            error=e,
+            template=template_name,
+            reference_doctype=doc.doctype,
+            reference_name=doc.name
+        )
 
 def schedule_delayed_send(doc, template_name, timing, delay):
     """Schedule a delayed WhatsApp message send."""
@@ -1515,43 +1927,98 @@ def process_recurring_to_selected_customers(template_name):
     Process recurring auto-send to manually selected customers.
     Runs via scheduler (weekly/monthly).
     """
+    start_time = time.time()
+    
     try:
         template = frappe.get_doc("WhatsApp Template", template_name)
         
         if not template.enable_auto_send or template.auto_send_mode != "Recurring":
+            log_info(
+                activity_type="Recurring Send Skipped",
+                template=template_name,
+                metadata={"reason": "auto_send_not_enabled_or_wrong_mode"}
+            )
             return
         
         # Get selected customers
         selected_customers = template.selected_customers or []
         if not selected_customers:
-            frappe.logger().info(f"[AUTO-SEND] No customers selected for template {template_name}")
+            log_warning(
+                activity_type="Recurring Send Skipped",
+                template=template_name,
+                metadata={"reason": "no_customers_selected"}
+            )
             return
         
-        frappe.logger().info(f"[AUTO-SEND] Processing {template_name} for {len(selected_customers)} customers")
+        log_info(
+            activity_type="Recurring Send Started",
+            template=template_name,
+            metadata={
+                "customer_count": len(selected_customers),
+                "frequency": template.auto_send_frequency,
+                "cooldown_hours": template.cooldown_hours,
+                "max_per_customer": template.max_per_customer
+            }
+        )
         
         # Track counts for anti-ban
         sent_count = 0
         failed_count = 0
+        customer_results = []
         
         # Process each selected customer with anti-ban delays
         for idx, customer_row in enumerate(selected_customers):
+            customer_result = {
+                "customer": customer_row.customer,
+                "status": "Pending",
+                "phone": None,
+                "error": None,
+                "attempts": 0
+            }
+            
             try:
                 customer = frappe.get_doc("Customer", customer_row.customer)
                 phone = validate_phone_medium(customer.mobile_no or customer.phone)
+                customer_result["phone"] = phone
                 
                 if not phone:
-                    frappe.logger().warning(f"[AUTO-SEND] No valid phone for customer {customer.name}")
+                    log_warning(
+                        activity_type="Recurring Send Customer Skipped",
+                        template=template_name,
+                        customer=customer.name,
+                        error_details="No valid phone number",
+                        metadata={"step": "phone_validation"}
+                    )
                     failed_count += 1
+                    customer_result["status"] = "Skipped"
+                    customer_result["error"] = "No valid phone"
+                    customer_results.append(customer_result)
                     continue
                 
                 # Check customer cooldown
                 if not check_customer_cooldown(customer.name, template.name, template.cooldown_hours):
-                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} in cooldown, skipping")
+                    log_info(
+                        activity_type="Recurring Send Customer Skipped",
+                        template=template_name,
+                        customer=customer.name,
+                        metadata={"reason": "in_cooldown_period", "cooldown_hours": template.cooldown_hours}
+                    )
+                    customer_result["status"] = "Skipped"
+                    customer_result["error"] = "In cooldown period"
+                    customer_results.append(customer_result)
                     continue
                 
                 # Check per-customer daily limit
                 if not check_customer_daily_limit(customer.name, template.name, template.max_per_customer):
-                    frappe.logger().info(f"[AUTO-SEND] Customer {customer.name} daily limit reached")
+                    log_info(
+                        activity_type="Recurring Send Customer Skipped",
+                        template=template_name,
+                        customer=customer.name,
+                        metadata={"reason": "daily_limit_reached", "max_per_customer": template.max_per_customer}
+                    )
+                    customer_result["status"] = "Skipped"
+                    customer_result["error"] = "Daily limit reached"
+                    customer_results.append(customer_result)
                     continue
                 
                 # Render message with customer context
@@ -1559,48 +2026,124 @@ def process_recurring_to_selected_customers(template_name):
                 
                 # Send with retry logic
                 success = False
+                final_error = None
+                
                 for attempt in range(1, 4):  # 3 attempts
+                    customer_result["attempts"] = attempt
+                    
                     try:
                         result = send_message_direct(phone, message, template)
                         
                         if result.get("status") == "success":
-                            log_auto_send(template.name, customer.name, "Sent", None)
+                            log_success(
+                                activity_type="Recurring Send Customer Success",
+                                template=template_name,
+                                customer=customer.name,
+                                customer_phone=phone,
+                                message_content=message[:200],
+                                retry_count=attempt,
+                                metadata={"attempts_used": attempt}
+                            )
                             success = True
                             sent_count += 1
+                            customer_result["status"] = "Sent"
                             break
                         else:
-                            error = result.get("message", "Unknown error")
-                            frappe.logger().warning(f"[AUTO-SEND] Attempt {attempt} failed for {customer.name}: {error}")
+                            final_error = result.get("message", "Unknown error")
+                            log_warning(
+                                activity_type="Recurring Send Customer Retry",
+                                warning_msg=f"Attempt {attempt} failed",
+                                template=template_name,
+                                customer=customer.name,
+                                customer_phone=phone,
+                                error_details=final_error,
+                                retry_count=attempt,
+                                metadata={"attempt": attempt}
+                            )
                             
                             if attempt < 3:
                                 delay = smart_delay(sent_count, failed_count)
                                 time.sleep(delay)
                     
                     except Exception as e:
-                        frappe.logger().error(f"[AUTO-SEND] Exception attempt {attempt} for {customer.name}: {str(e)}")
+                        final_error = str(e)
+                        log_error(
+                            activity_type="Recurring Send Customer Exception",
+                            error=e,
+                            template=template_name,
+                            customer=customer.name,
+                            customer_phone=phone,
+                            retry_count=attempt,
+                            metadata={"attempt": attempt}
+                        )
                         if attempt < 3:
                             delay = smart_delay(sent_count, failed_count)
                             time.sleep(delay)
                 
                 if not success:
-                    log_auto_send(template.name, customer.name, "Failed", "Failed after 3 attempts")
                     failed_count += 1
+                    customer_result["status"] = "Failed"
+                    customer_result["error"] = final_error or "Failed after 3 attempts"
+                    log_error(
+                        activity_type="Recurring Send Customer Failed",
+                        error=final_error or "Failed after 3 attempts",
+                        template=template_name,
+                        customer=customer.name,
+                        customer_phone=phone,
+                        retry_count=3,
+                        metadata={"total_attempts": 3}
+                    )
+                
+                customer_results.append(customer_result)
                 
                 # Smart delay before next customer (anti-ban)
                 if idx < len(selected_customers) - 1:
                     delay = smart_delay(sent_count, failed_count)
-                    frappe.logger().info(f"[AUTO-SEND] Waiting {delay}s before next customer...")
+                    log_info(
+                        activity_type="Recurring Send Delay",
+                        template=template_name,
+                        metadata={"delay_seconds": delay, "customer_index": idx + 1, "total": len(selected_customers)}
+                    )
                     time.sleep(delay)
                     
             except Exception as e:
-                frappe.logger().error(f"[AUTO-SEND] Error processing customer {customer_row.customer}: {str(e)}")
                 failed_count += 1
+                customer_result["status"] = "Failed"
+                customer_result["error"] = str(e)
+                customer_results.append(customer_result)
+                log_error(
+                    activity_type="Recurring Send Customer Error",
+                    error=e,
+                    template=template_name,
+                    customer=customer_row.customer,
+                    metadata={"step": "processing"}
+                )
                 continue
         
-        frappe.logger().info(f"[AUTO-SEND] Completed {template_name}: {sent_count} sent, {failed_count} failed")
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        log_success(
+            activity_type="Recurring Send Completed",
+            template=template_name,
+            duration_ms=duration_ms,
+            metadata={
+                "sent": sent_count,
+                "failed": failed_count,
+                "total": len(selected_customers),
+                "success_rate": round((sent_count / len(selected_customers) * 100), 2) if selected_customers else 0,
+                "customer_results": customer_results[:10]  # Log first 10 for detail
+            }
+        )
         
     except Exception as e:
-        frappe.logger().error(f"[AUTO-SEND] Error in process_recurring_to_selected_customers: {str(e)}")
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_error(
+            activity_type="Recurring Send Failed",
+            error=e,
+            template=template_name,
+            duration_ms=duration_ms,
+            metadata={"step": "process_recurring_to_selected_customers"}
+        )
 
 
 def process_weekly_recurring():

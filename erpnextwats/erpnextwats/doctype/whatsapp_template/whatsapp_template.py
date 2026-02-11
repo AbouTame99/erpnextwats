@@ -4,6 +4,7 @@
 
 import frappe
 from frappe.model.document import Document
+from erpnextwats.erpnextwats.api import log_info, log_error
 
 class WhatsAppTemplate(Document):
     def on_update(self):
@@ -213,3 +214,48 @@ function createTemplateDialog(frm, templates, phone) {{
 """
         doc.script = js_code
         doc.save(ignore_permissions=True)
+        
+        # Log template update
+        action = "created" if self.is_new() else "updated"
+        log_info(
+            activity_type=f"Template {action.capitalize()}",
+            template=self.name,
+            reference_doctype="WhatsApp Template",
+            reference_name=self.name,
+            metadata={
+                "template_name": self.template_name,
+                "doctype_name": self.doctype_name,
+                "action": action,
+                "client_script": script_name,
+                "is_auto_send": self.enable_auto_send if hasattr(self, 'enable_auto_send') else False
+            }
+        )
+
+    def before_delete(self):
+        """Log template deletion before it happens."""
+        try:
+            # Delete the associated client script
+            script_name = f"WhatsApp Integration for {self.doctype_name}"
+            if frappe.db.exists("Client Script", script_name):
+                frappe.delete_doc("Client Script", script_name, ignore_permissions=True)
+            
+            # Log the deletion
+            log_info(
+                activity_type="Template Deleted",
+                template=self.name,
+                reference_doctype="WhatsApp Template",
+                reference_name=self.name,
+                metadata={
+                    "template_name": self.template_name,
+                    "doctype_name": self.doctype_name,
+                    "client_script_removed": script_name
+                }
+            )
+        except Exception as e:
+            log_error(
+                activity_type="Template Delete Error",
+                error=e,
+                template=self.name,
+                metadata={"step": "before_delete"}
+            )
+

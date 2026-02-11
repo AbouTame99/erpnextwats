@@ -22,71 +22,92 @@ erpnextwats.WhatsAppChat = class {
 
     prepare_layout() {
         this.page.main.html(`
-			<div class="whatsapp-wrapper" style="height: calc(100vh - 150px); display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f0f2f5; border-radius: 12px; overflow: hidden;">
-				<div id="wats-container" style="text-align: center; background: white; padding: 40px; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); max-width: 600px; width: 90%;">
+			<div class="whatsapp-wrapper" style="padding: 20px; background: #f5f5f5; min-height: calc(100vh - 60px);">
+				<div class="container-fluid" style="max-width: 800px; margin: 0 auto;">
 					
-					<!-- Session Status Panel (Always Visible) -->
-					<div class="session-status-panel" style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #ccc;">
-						<h5 style="margin-top: 0;"><i class="fa fa-info-circle"></i> Session Status</h5>
-						<div id="session-info">
-							<div class="text-muted">Checking session...</div>
-						</div>
-						<div style="margin-top: 10px;">
-							<button class="btn btn-xs btn-default btn-refresh-status">
-								<i class="fa fa-refresh"></i> Refresh
-							</button>
-							<span class="last-check text-muted" style="font-size: 12px; margin-left: 10px;"></span>
-						</div>
+					<!-- Header -->
+					<div style="text-align: center; margin-bottom: 20px;">
+						<i class="fa fa-whatsapp" style="font-size: 40px; color: #25D366;"></i>
+						<h4 style="margin: 10px 0 5px 0;">Company WhatsApp</h4>
+						<p class="text-muted" style="font-size: 13px; margin: 0;">Shared session for all employees</p>
 					</div>
 
-					<div class="wats-init">
-						<i class="fa fa-whatsapp" style="font-size: 80px; color: #25D366; margin-bottom: 20px;"></i>
-						<h3>Connect Company WhatsApp</h3>
-						<p class="text-muted">Scan QR code with your company phone to enable WhatsApp for all employees.</p>
-						<div class="alert alert-info" style="margin: 20px 0; text-align: left; font-size: 13px;">
-							<strong><i class="fa fa-users"></i> Shared Session</strong><br>
-							• All employees will use this single WhatsApp connection<br>
-							• Use a company phone number, not personal<br>
-							• Session typically lasts 2-14 days
+					<!-- Session Status Panel (Always Visible) -->
+					<div class="session-status-panel" style="margin-bottom: 15px; padding: 15px; background: white; border-radius: 8px; border-left: 3px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+						<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+							<h6 style="margin: 0; font-size: 14px;"><i class="fa fa-info-circle"></i> Session Status</h6>
+							<button class="btn btn-xs btn-default btn-refresh-status" style="padding: 2px 8px; font-size: 11px;">
+								<i class="fa fa-refresh"></i> Refresh
+							</button>
 						</div>
-						<button class="btn btn-primary btn-lg btn-connect" style="background: #25D366; border: none; margin-top: 20px;">
-							<i class="fa fa-qrcode"></i> Start Connection
-						</button>
+						<div id="session-info" style="font-size: 13px;">
+							<div class="text-muted">Checking session...</div>
+						</div>
+						<div class="last-check text-muted" style="font-size: 11px; margin-top: 8px; text-align: right;"></div>
 					</div>
-					
-					<div class="wats-qr" style="display: none;">
-						<h4><i class="fa fa-mobile"></i> Scan with your phone</h4>
-						<p class="text-muted">Open WhatsApp → Settings → Linked Devices → Link a Device</p>
-						<div id="qr-image" style="margin: 25px auto; width: 250px; height: 250px; background: #eee; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center;">
-							<div class="spinner-border text-primary" role="status"></div>
-						</div>
-						<p class="text-info status-text">Generating QR Code...</p>
-						<div class="alert alert-warning" style="margin-top: 15px; font-size: 12px;">
-							<strong>Important:</strong> This connects the <strong>company's shared WhatsApp</strong>.<br>
-							All employees will send messages from this number.
-						</div>
-					</div>
-					
-					<div class="wats-connected" style="display: none;">
-						<div style="color: #25D366; font-size: 50px; margin-bottom: 10px;">
-							<i class="fa fa-check-circle"></i>
-						</div>
-						<h4>Shared Session Active!</h4>
-						<p>The company WhatsApp is connected and ready.</p>
+
+					<!-- Main Content Card -->
+					<div id="wats-container" style="background: white; padding: 25px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center;">
 						
-						<div class="alert alert-success" style="margin: 20px 0; text-align: left;">
-							<h5 style="margin-top: 0;"><i class="fa fa-users"></i> All Employees Can Now:</h5>
-							<ul style="margin-bottom: 0; text-align: left;">
-								<li>Send individual WhatsApp messages</li>
-								<li>Use Bulk WhatsApp feature</li>
-								<li>Send automated messages</li>
-							</ul>
+						<div class="wats-init">
+							<div class="alert alert-info" style="margin-bottom: 20px; padding: 12px; font-size: 12px; text-align: left;">
+								<strong><i class="fa fa-users"></i> Shared Session</strong><br>
+								<small>
+								• All employees use this single connection<br>
+								• Use a company phone number<br>
+								• Session lasts 2-14 days typically
+								</small>
+							</div>
+							<button class="btn btn-primary btn-connect" style="background: #25D366; border: none; padding: 10px 25px;">
+								<i class="fa fa-qrcode"></i> Connect WhatsApp
+							</button>
 						</div>
 						
-						<button class="btn btn-outline-danger btn-sm mt-3 btn-disconnect">
-							<i class="fa fa-unlink"></i> Disconnect Session
-						</button>
+						<div class="wats-qr" style="display: none;">
+							<h5 style="margin-bottom: 15px;"><i class="fa fa-mobile"></i> Scan QR Code</h5>
+							<p class="text-muted" style="font-size: 12px; margin-bottom: 15px;">
+								WhatsApp → Settings → Linked Devices → Link Device
+							</p>
+							<div id="qr-image" style="margin: 0 auto 15px auto; width: 200px; height: 200px; background: #f5f5f5; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+								<div class="spinner-border text-primary" style="width: 30px; height: 30px;" role="status"></div>
+							</div>
+							<p class="text-info status-text" style="font-size: 13px; margin-bottom: 15px;">Generating QR Code...</p>
+							<div class="alert alert-warning" style="padding: 10px; font-size: 11px; margin: 0;">
+								<strong>Important:</strong> This connects your <strong>company's WhatsApp</strong>. 
+								All employees will use this number.
+							</div>
+						</div>
+						
+						<div class="wats-connected" style="display: none;">
+							<div style="color: #25D366; font-size: 40px; margin-bottom: 10px;">
+								<i class="fa fa-check-circle"></i>
+							</div>
+							<h5 style="margin-bottom: 10px;">Connected!</h5>
+							<p style="font-size: 13px; color: #666; margin-bottom: 20px;">
+								All employees can now send WhatsApp messages
+							</p>
+							
+							<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; text-align: center;">
+								<div style="padding: 10px; background: #f8f9fa; border-radius: 6px;">
+									<i class="fa fa-user" style="color: #25D366; font-size: 20px;"></i>
+									<div style="font-size: 11px; margin-top: 5px;">Individual</div>
+								</div>
+								<div style="padding: 10px; background: #f8f9fa; border-radius: 6px;">
+									<i class="fa fa-users" style="color: #25D366; font-size: 20px;"></i>
+									<div style="font-size: 11px; margin-top: 5px;">Bulk</div>
+								</div>
+								<div style="padding: 10px; background: #f8f9fa; border-radius: 6px;">
+									<i class="fa fa-clock-o" style="color: #25D366; font-size: 20px;"></i>
+									<div style="font-size: 11px; margin-top: 5px;">Auto</div>
+								</div>
+							</div>
+							
+							<button class="btn btn-outline-danger btn-sm btn-disconnect" style="font-size: 12px;">
+								<i class="fa fa-unlink"></i> Disconnect
+							</button>
+						</div>
 					</div>
+					
 				</div>
 			</div>
 		`);
@@ -147,59 +168,65 @@ erpnextwats.WhatsAppChat = class {
     update_session_info(info, status) {
         const $info = this.$container.find('#session-info');
         const now = new Date();
-        const timeString = now.toLocaleTimeString();
+        const timeString = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         
-        this.$container.find('.last-check').text(`Last checked: ${timeString}`);
+        this.$container.find('.last-check').text(`Updated: ${timeString}`);
         
         if (!info && status === 'disconnected') {
             $info.html(`
-                <div style="color: #dc3545;">
-                    <i class="fa fa-times-circle"></i> <strong>Disconnected</strong><br>
-                    <small>No active WhatsApp session</small>
+                <div style="display: flex; align-items: center; gap: 8px; color: #dc3545;">
+                    <i class="fa fa-times-circle"></i>
+                    <div>
+                        <strong>Disconnected</strong><br>
+                        <small style="color: #666;">No active session</small>
+                    </div>
                 </div>
             `);
             this.$container.find('.session-status-panel').css('border-left-color', '#dc3545');
         } else if (info && status === 'ready') {
             const daysConnected = info.daysConnected || 0;
             const phoneNumber = info.phoneNumber || 'Unknown';
-            let warningHtml = '';
+            let warningBadge = '';
             
             if (daysConnected >= 10) {
-                warningHtml = `
-                    <div class="alert alert-warning" style="margin-top: 10px; font-size: 12px; padding: 8px;">
-                        <i class="fa fa-exclamation-triangle"></i> 
-                        <strong>Warning:</strong> Session is ${daysConnected} days old. 
-                        WhatsApp typically expires sessions after 2-14 days. 
-                        Consider reconnecting soon to avoid downtime.
-                    </div>
-                `;
+                warningBadge = `<span class="badge badge-warning" style="margin-left: 8px; font-size: 10px;">Expires soon</span>`;
             }
             
             $info.html(`
-                <div style="color: #28a745;">
-                    <i class="fa fa-check-circle"></i> <strong>Connected</strong><br>
-                    <small>
-                        <i class="fa fa-phone"></i> ${phoneNumber}<br>
-                        <i class="fa fa-calendar"></i> Connected: ${daysConnected} days ago<br>
-                        <i class="fa fa-envelope"></i> Messages sent: ${info.messageCount || 0}
-                    </small>
+                <div style="display: flex; align-items: center; gap: 10px; color: #28a745;">
+                    <i class="fa fa-check-circle" style="font-size: 18px;"></i>
+                    <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 5px;">
+                            <strong>Active</strong> ${warningBadge}
+                        </div>
+                        <small style="color: #666; display: block; margin-top: 3px;">
+                            <i class="fa fa-phone" style="width: 14px;"></i> ${phoneNumber} • 
+                            <i class="fa fa-calendar" style="width: 14px;"></i> ${daysConnected} days • 
+                            <i class="fa fa-envelope" style="width: 14px;"></i> ${info.messageCount || 0} msgs
+                        </small>
+                    </div>
                 </div>
-                ${warningHtml}
             `);
             this.$container.find('.session-status-panel').css('border-left-color', '#28a745');
         } else if (status === 'qr_ready' || status === 'initializing') {
             $info.html(`
-                <div style="color: #ffc107;">
-                    <i class="fa fa-spinner fa-spin"></i> <strong>Connecting...</strong><br>
-                    <small>Waiting for QR code scan</small>
+                <div style="display: flex; align-items: center; gap: 8px; color: #ffc107;">
+                    <i class="fa fa-spinner fa-spin"></i>
+                    <div>
+                        <strong>Connecting...</strong><br>
+                        <small style="color: #666;">Scan QR code</small>
+                    </div>
                 </div>
             `);
             this.$container.find('.session-status-panel').css('border-left-color', '#ffc107');
         } else {
             $info.html(`
-                <div class="text-muted">
-                    <i class="fa fa-question-circle"></i> <strong>Unknown Status</strong><br>
-                    <small>Please refresh</small>
+                <div style="display: flex; align-items: center; gap: 8px; color: #6c757d;">
+                    <i class="fa fa-question-circle"></i>
+                    <div>
+                        <strong>Unknown</strong><br>
+                        <small>Click refresh</small>
+                    </div>
                 </div>
             `);
             this.$container.find('.session-status-panel').css('border-left-color', '#6c757d');

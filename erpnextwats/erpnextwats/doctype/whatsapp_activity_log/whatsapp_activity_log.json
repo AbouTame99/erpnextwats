@@ -1,0 +1,250 @@
+{
+    "actions": [],
+    "allow_rename": 0,
+    "autoname": "format:WAL-{YY}-{MM}-{DD}-{#####}",
+    "creation": "2024-01-25 00:00:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "timestamp_section",
+        "activity_timestamp",
+        "activity_date",
+        "basic_info_section",
+        "activity_type",
+        "activity_category",
+        "status",
+        "user_info_section",
+        "user",
+        "user_name",
+        "session_info_section",
+        "session_id",
+        "phone_number",
+        "reference_section",
+        "reference_doctype",
+        "reference_name",
+        "template",
+        "customer",
+        "customer_phone",
+        "details_section",
+        "message_content",
+        "error_details",
+        "stack_trace",
+        "performance_section",
+        "duration_ms",
+        "retry_count",
+        "metadata_section",
+        "metadata_json",
+        "ip_address",
+        "user_agent"
+    ],
+    "fields": [
+        {
+            "fieldname": "timestamp_section",
+            "fieldtype": "Section Break",
+            "label": "Timestamp"
+        },
+        {
+            "default": "Now",
+            "fieldname": "activity_timestamp",
+            "fieldtype": "Datetime",
+            "label": "Timestamp",
+            "reqd": 1
+        },
+        {
+            "fieldname": "activity_date",
+            "fieldtype": "Date",
+            "label": "Date",
+            "reqd": 1
+        },
+        {
+            "fieldname": "basic_info_section",
+            "fieldtype": "Section Break",
+            "label": "Activity Information"
+        },
+        {
+            "fieldname": "activity_type",
+            "fieldtype": "Select",
+            "label": "Activity Type",
+            "options": "\nBulk Send Started\nBulk Send Completed\nBulk Send Failed\nAuto Send Triggered\nAuto Send Completed\nAuto Send Failed\nTemplate Created\nTemplate Updated\nTemplate Deleted\nSession Connected\nSession Disconnected\nSession Expired\nSession QR Generated\nSession Error\nMessage Sent\nMessage Failed\nMessage Received\nGateway Started\nGateway Stopped\nGateway Error\nRate Limit Hit\nRetry Attempt",
+            "reqd": 1
+        },
+        {
+            "fieldname": "activity_category",
+            "fieldtype": "Select",
+            "label": "Category",
+            "options": "\nBulk\nAuto Send\nTemplate\nSession\nMessage\nGateway\nSystem",
+            "reqd": 1
+        },
+        {
+            "fieldname": "status",
+            "fieldtype": "Select",
+            "label": "Status",
+            "options": "\nSuccess\nFailed\nWarning\nInfo\nError",
+            "reqd": 1
+        },
+        {
+            "fieldname": "user_info_section",
+            "fieldtype": "Section Break",
+            "label": "User Information"
+        },
+        {
+            "fieldname": "user",
+            "fieldtype": "Link",
+            "label": "User",
+            "options": "User"
+        },
+        {
+            "fieldname": "user_name",
+            "fieldtype": "Data",
+            "label": "User Name"
+        },
+        {
+            "fieldname": "session_info_section",
+            "fieldtype": "Section Break",
+            "label": "Session Information"
+        },
+        {
+            "fieldname": "session_id",
+            "fieldtype": "Data",
+            "label": "Session ID"
+        },
+        {
+            "fieldname": "phone_number",
+            "fieldtype": "Data",
+            "label": "Phone Number"
+        },
+        {
+            "fieldname": "reference_section",
+            "fieldtype": "Section Break",
+            "label": "References"
+        },
+        {
+            "fieldname": "reference_doctype",
+            "fieldtype": "Link",
+            "label": "Reference DocType",
+            "options": "DocType"
+        },
+        {
+            "fieldname": "reference_name",
+            "fieldtype": "Data",
+            "label": "Reference Name"
+        },
+        {
+            "fieldname": "template",
+            "fieldtype": "Link",
+            "label": "WhatsApp Template",
+            "options": "WhatsApp Template"
+        },
+        {
+            "fieldname": "customer",
+            "fieldtype": "Link",
+            "label": "Customer",
+            "options": "Customer"
+        },
+        {
+            "fieldname": "customer_phone",
+            "fieldtype": "Data",
+            "label": "Customer Phone"
+        },
+        {
+            "fieldname": "details_section",
+            "fieldtype": "Section Break",
+            "label": "Details"
+        },
+        {
+            "fieldname": "message_content",
+            "fieldtype": "Long Text",
+            "label": "Message Content"
+        },
+        {
+            "fieldname": "error_details",
+            "fieldtype": "Long Text",
+            "label": "Error Details"
+        },
+        {
+            "fieldname": "stack_trace",
+            "fieldtype": "Code",
+            "label": "Stack Trace",
+            "options": "Python"
+        },
+        {
+            "fieldname": "stack_trace",
+            "fieldtype": "Code",
+            "label": "Stack Trace",
+            "options": "Python"
+        },
+        {
+            "fieldname": "performance_section",
+            "fieldtype": "Section Break",
+            "label": "Performance"
+        },
+        {
+            "fieldname": "duration_ms",
+            "fieldtype": "Int",
+            "label": "Duration (ms)"
+        },
+        {
+            "fieldname": "retry_count",
+            "fieldtype": "Int",
+            "label": "Retry Count"
+        },
+        {
+            "fieldname": "metadata_section",
+            "fieldtype": "Section Break",
+            "label": "Metadata"
+        },
+        {
+            "fieldname": "metadata_json",
+            "fieldtype": "JSON",
+            "label": "Metadata (JSON)"
+        },
+        {
+            "fieldname": "ip_address",
+            "fieldtype": "Data",
+            "label": "IP Address"
+        },
+        {
+            "fieldname": "user_agent",
+            "fieldtype": "Data",
+            "label": "User Agent"
+        }
+    ],
+    "index_web_pages_for_search": 1,
+    "links": [],
+    "modified": "2024-01-25 00:00:00.000000",
+    "modified_by": "Administrator",
+    "module": "Erpnextwats",
+    "name": "WhatsApp Activity Log",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 0,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "System Manager",
+            "share": 1,
+            "write": 0
+        },
+        {
+            "create": 0,
+            "delete": 0,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "Sales Manager",
+            "share": 0,
+            "write": 0
+        }
+    ],
+    "sort_field": "activity_timestamp",
+    "sort_order": "DESC",
+    "states": [],
+    "title_field": "activity_type",
+    "track_changes": 1
+}
