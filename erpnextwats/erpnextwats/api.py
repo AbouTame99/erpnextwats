@@ -83,12 +83,15 @@ def log_error(activity_type, error, user=None, **kwargs):
     """Convenience function for logging errors with stack trace"""
     error_msg = str(error)
     stack = traceback.format_exc()
+    # Add stack trace to metadata
+    metadata = kwargs.get('metadata', {})
+    metadata['stack_trace'] = stack
+    kwargs['metadata'] = metadata
     log_whatsapp_activity(
         activity_type=activity_type,
         status="Error",
         user=user,
         error_details=error_msg,
-        stack_trace=stack,
         **kwargs
     )
 
@@ -2046,7 +2049,8 @@ def process_recurring_to_selected_customers(template_name):
         selected_customers = template.selected_customers or []
         if not selected_customers:
             log_warning(
-                activity_type="Recurring Send Skipped",
+                "Recurring Send Skipped",
+                "No customers selected for this template",
                 template=template_name,
                 metadata={"reason": "no_customers_selected"}
             )
@@ -2085,10 +2089,10 @@ def process_recurring_to_selected_customers(template_name):
                 
                 if not phone:
                     log_warning(
-                        activity_type="Recurring Send Customer Skipped",
+                        "Recurring Send Customer Skipped",
+                        "No valid phone number",
                         template=template_name,
                         customer=customer.name,
-                        error_details="No valid phone number",
                         metadata={"step": "phone_validation"}
                     )
                     failed_count += 1
@@ -2153,12 +2157,8 @@ def process_recurring_to_selected_customers(template_name):
                         else:
                             final_error = result.get("message", "Unknown error")
                             log_warning(
-                                activity_type="Recurring Send Customer Retry",
-                                warning_msg=f"Attempt {attempt} failed",
-                                template=template_name,
-                                customer=customer.name,
-                                customer_phone=phone,
-                                error_details=final_error,
+                                "Recurring Send Customer Retry",
+                                f"Attempt {attempt} failed: {final_error}",
                                 retry_count=attempt,
                                 metadata={"attempt": attempt}
                             )
@@ -3031,8 +3031,8 @@ def send_dead_stock_campaign(template):
     
     if not today_items:
         log_warning(
-            activity_type="Dead Stock Campaign",
-            warning_msg="No dead stock items found",
+            "Dead Stock Campaign",
+            "No dead stock items found",
             template=template.name
         )
         return
@@ -3042,8 +3042,8 @@ def send_dead_stock_campaign(template):
     
     if not customers:
         log_warning(
-            activity_type="Dead Stock Campaign",
-            warning_msg="No customers with valid phones found",
+            "Dead Stock Campaign",
+            "No customers with valid phones found",
             template=template.name
         )
         return
@@ -3183,8 +3183,8 @@ def send_dead_stock_campaign(template):
     # Log items without images to WhatsApp Activity Log
     if items_without_images:
         log_warning(
-            activity_type="Dead Stock Items Without Images",
-            warning_msg=f"{len(items_without_images)} items sent without images",
+            "Dead Stock Items Without Images",
+            f"{len(items_without_images)} items sent without images",
             template=template.name,
             metadata={
                 "items_without_images": items_without_images,

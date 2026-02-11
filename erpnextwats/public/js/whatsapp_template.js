@@ -448,8 +448,4 @@ frappe.ui.form.on('WhatsApp Template', {
         // Refresh to show/hide relevant sections
         frm.refresh();
     }
-
-    visual_conditions: function(frm) {
-        // Triggered when field value changes
-    }
 });
