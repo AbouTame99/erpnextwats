@@ -1502,7 +1502,7 @@ def handle_auto_send(doc, method):
                 "doctype_name": doc.doctype,
                 "enable_auto_send": 1
             },
-            fields=["name", "auto_send_timing", "auto_send_delay", "auto_send_status", "auto_send_conditions", "recurring_send_time"]
+            fields=["name", "auto_send_mode", "trigger_status", "visual_conditions"]
         )
     except Exception as e:
         # If fields don't exist, just return silently
@@ -1530,73 +1530,69 @@ def handle_auto_send(doc, method):
         try:
             template = frappe.get_doc("WhatsApp Template", template_data.name)
             
-            # Check conditions if specified
-            if not check_document_conditions(doc, template):
-                log_info(
-                    activity_type="Auto Send Skipped",
-                    status="Info",
-                    template=template.name,
-                    reference_doctype=doc.doctype,
-                    reference_name=doc.name,
-                    metadata={"reason": "conditions_not_met"}
-                )
+            # Get auto send mode (handle both old and new field names)
+            auto_send_mode = getattr(template, 'auto_send_mode', None)
+            if not auto_send_mode:
+                # Fallback for backward compatibility
+                auto_send_mode = getattr(template, 'auto_send_timing', 'On Submit')
+            
+            # Only process On Submit and On Status Change modes here
+            # Recurring and Monitor Documents modes are handled by schedulers
+            if auto_send_mode in ["Recurring", "Monitor Documents"]:
                 continue
             
-            # Handle different timing options
-            if template.auto_send_timing == "Immediate":
-                # Send immediately
-                log_info(
-                    activity_type="Auto Send Immediate",
-                    status="Info",
-                    template=template.name,
-                    reference_doctype=doc.doctype,
-                    reference_name=doc.name
-                )
-                send_auto_message(doc, template.name)
-                
-            elif template.auto_send_timing == "On Status Change":
-                # Check if current status matches trigger status
-                if template.auto_send_status:
-                    if check_status_condition(doc, template.auto_send_status):
+            # For On Status Change mode, check if we need to process
+            if auto_send_mode == "On Status Change":
+                trigger_status = getattr(template, 'trigger_status', None)
+                if trigger_status:
+                    # Check if current document status matches trigger status
+                    current_status = getattr(doc, 'status', None)
+                    if current_status != trigger_status:
                         log_info(
-                            activity_type="Auto Send Status Change",
+                            activity_type="Auto Send Skipped",
                             status="Info",
                             template=template.name,
                             reference_doctype=doc.doctype,
                             reference_name=doc.name,
-                            metadata={"trigger_status": template.auto_send_status}
+                            metadata={
+                                "reason": "status_mismatch",
+                                "current_status": current_status,
+                                "trigger_status": trigger_status
+                            }
                         )
-                        send_auto_message(doc, template.name)
+                        continue
             
-            elif template.auto_send_timing in ["After Minutes", "After Hours", "After Days"]:
-                # Schedule delayed send
-                if template.auto_send_delay:
+            # Check visual conditions/filters if specified
+            visual_conditions = getattr(template, 'visual_conditions', None)
+            if visual_conditions:
+                if not check_visual_conditions(doc, visual_conditions):
                     log_info(
-                        activity_type="Auto Send Scheduled",
+                        activity_type="Auto Send Skipped",
                         status="Info",
                         template=template.name,
                         reference_doctype=doc.doctype,
                         reference_name=doc.name,
                         metadata={
-                            "timing": template.auto_send_timing,
-                            "delay": template.auto_send_delay
+                            "reason": "conditions_not_met",
+                            "conditions": visual_conditions
                         }
                     )
-                    schedule_delayed_send(doc, template.name, template.auto_send_timing, template.auto_send_delay)
+                    continue
             
-            elif template.auto_send_timing in ["Every Minute", "Every Hour", "Every Day", "Every Week", "Every Month"]:
-                # Recurring sends are handled by scheduler, but we can trigger on document creation/update
-                # Check if conditions are met for immediate send
-                if check_document_conditions(doc, template):
-                    log_info(
-                        activity_type="Auto Send Recurring",
-                        status="Info",
-                        template=template.name,
-                        reference_doctype=doc.doctype,
-                        reference_name=doc.name,
-                        metadata={"frequency": template.auto_send_timing}
-                    )
-                    send_auto_message(doc, template.name)
+            # All checks passed - send the message
+            log_info(
+                activity_type="Auto Send Processing",
+                status="Info",
+                template=template.name,
+                reference_doctype=doc.doctype,
+                reference_name=doc.name,
+                metadata={
+                    "auto_send_mode": auto_send_mode,
+                    "trigger_status": getattr(template, 'trigger_status', None),
+                    "conditions_applied": bool(visual_conditions)
+                }
+            )
+            send_auto_message(doc, template.name)
         except Exception as e:
             # Log error with details
             log_error(
@@ -1727,6 +1723,112 @@ def check_document_conditions(doc, template):
             return False
     
     return True
+
+def check_visual_conditions(doc, conditions_json):
+    """
+    Check if document meets the visual conditions/filter JSON.
+    
+    Expected format:
+    {
+        "rules": [
+            {"field": "outstanding_amount", "operator": ">", "value": 0},
+            {"field": "grand_total", "operator": ">=", "value": 1000},
+            {"field": "status", "operator": "=", "value": "Unpaid"}
+        ]
+    }
+    
+    Returns True if all rules are satisfied, False otherwise.
+    """
+    if not conditions_json:
+        return True
+    
+    try:
+        if isinstance(conditions_json, str):
+            conditions = json.loads(conditions_json)
+        else:
+            conditions = conditions_json
+        
+        rules = conditions.get("rules", [])
+        
+        if not rules:
+            return True
+        
+        for rule in rules:
+            field = rule.get("field")
+            operator = rule.get("operator", "=")
+            value = rule.get("value")
+            
+            if not field:
+                continue
+            
+            # Get field value from document
+            doc_value = getattr(doc, field, None)
+            
+            # Handle None values
+            if doc_value is None:
+                # If checking for empty/null
+                if operator == "=" and (value is None or value == ""):
+                    continue
+                elif operator == "!=" and value is not None:
+                    continue
+                else:
+                    return False
+            
+            # Convert values for comparison
+            try:
+                # Try numeric comparison
+                doc_value_num = float(doc_value)
+                value_num = float(value)
+                
+                if operator == ">":
+                    if not (doc_value_num > value_num):
+                        return False
+                elif operator == "<":
+                    if not (doc_value_num < value_num):
+                        return False
+                elif operator == ">=":
+                    if not (doc_value_num >= value_num):
+                        return False
+                elif operator == "<=":
+                    if not (doc_value_num <= value_num):
+                        return False
+                elif operator == "=":
+                    if doc_value_num != value_num:
+                        return False
+                elif operator == "!=":
+                    if doc_value_num == value_num:
+                        return False
+                
+            except (ValueError, TypeError):
+                # String comparison
+                doc_value_str = str(doc_value).strip()
+                value_str = str(value).strip() if value is not None else ""
+                
+                if operator == "=":
+                    if doc_value_str != value_str:
+                        return False
+                elif operator == "!=":
+                    if doc_value_str == value_str:
+                        return False
+                elif operator == "contains":
+                    if value_str.lower() not in doc_value_str.lower():
+                        return False
+                elif operator == "not_contains":
+                    if value_str.lower() in doc_value_str.lower():
+                        return False
+                elif operator == "starts_with":
+                    if not doc_value_str.lower().startswith(value_str.lower()):
+                        return False
+                elif operator == "ends_with":
+                    if not doc_value_str.lower().endswith(value_str.lower()):
+                        return False
+        
+        return True
+        
+    except Exception as e:
+        frappe.logger().warning(f"[CHECK CONDITIONS] Error evaluating conditions: {str(e)}")
+        # If conditions can't be evaluated, allow the send (fail open)
+        return True
 
 def send_auto_message(doc, template_name):
     """Send WhatsApp message automatically."""
@@ -2345,4 +2447,909 @@ def build_filters_from_visual_conditions(conditions):
         frappe.logger().error(f"[AUTO-SEND] Error building filters: {str(e)}")
         return {}
 
+
+# ===== AUTO-SEND FILTER EXAMPLES =====
+# These are example JSON filters for common use cases
+# Use these in the visual_conditions field of WhatsApp Template
+
+AUTO_SEND_FILTER_EXAMPLES = {
+    "unpaid_invoices": {
+        "description": "Send only for unpaid Sales Invoices",
+        "json": {
+            "rules": [
+                {"field": "outstanding_amount", "operator": ">", "value": 0}
+            ]
+        }
+    },
+    
+    "high_value_orders": {
+        "description": "Send only for orders over 5000",
+        "json": {
+            "rules": [
+                {"field": "grand_total", "operator": ">=", "value": 5000}
+            ]
+        }
+    },
+    
+    "corporate_customers": {
+        "description": "Send only for Corporate customer group",
+        "json": {
+            "rules": [
+                {"field": "customer_group", "operator": "=", "value": "Corporate"}
+            ]
+        }
+    },
+    
+    "overdue_invoices": {
+        "description": "Send for invoices with Overdue status (perfect for Monitor Documents mode)",
+        "json": {
+            "rules": [
+                {"field": "status", "operator": "=", "value": "Overdue"}
+            ]
+        }
+    },
+    
+    "overdue_and_unpaid": {
+        "description": "Send for overdue invoices that still have outstanding amount (Monitor Documents mode)",
+        "json": {
+            "rules": [
+                {"field": "status", "operator": "=", "value": "Overdue"},
+                {"field": "outstanding_amount", "operator": ">", "value": 0}
+            ]
+        }
+    },
+    
+    "unpaid_high_value": {
+        "description": "Send for unpaid invoices over 1000",
+        "json": {
+            "rules": [
+                {"field": "outstanding_amount", "operator": ">", "value": 0},
+                {"field": "grand_total", "operator": ">=", "value": 1000}
+            ]
+        }
+    },
+    
+    "specific_customer": {
+        "description": "Send only for specific customer",
+        "json": {
+            "rules": [
+                {"field": "customer", "operator": "=", "value": "CUST-00001"}
+            ]
+        }
+    },
+    
+    "new_customers_only": {
+        "description": "Send only for Individual customer type",
+        "json": {
+            "rules": [
+                {"field": "customer_type", "operator": "=", "value": "Individual"}
+            ]
+        }
+    },
+    
+    "not_fully_delivered": {
+        "description": "Send for orders not fully delivered",
+        "json": {
+            "rules": [
+                {"field": "per_delivered", "operator": "<", "value": 100}
+            ]
+        }
+    },
+    
+    "partially_billed": {
+        "description": "Send for orders partially billed",
+        "json": {
+            "rules": [
+                {"field": "per_billed", "operator": ">", "value": 0},
+                {"field": "per_billed", "operator": "<", "value": 100}
+            ]
+        }
+    },
+    
+    "active_customers_only": {
+        "description": "Send only for active (not disabled) customers",
+        "json": {
+            "rules": [
+                {"field": "disabled", "operator": "=", "value": 0}
+            ]
+        }
+    }
+}
+
+
+@frappe.whitelist()
+def get_auto_send_filter_examples():
+    """
+    Returns example JSON filters for auto-send conditions.
+    
+    Use these examples in the visual_conditions field.
+    """
+    examples_list = []
+    for key, data in AUTO_SEND_FILTER_EXAMPLES.items():
+        examples_list.append({
+            "name": key,
+            "description": data["description"],
+            "json": json.dumps(data["json"], indent=2)
+        })
+    
+    return {
+        "status": "success",
+        "examples": examples_list
+    }
+
+
+# ===== MONITOR DOCUMENTS MODE =====
+# These functions run via scheduler to check already-submitted documents
+# and send WhatsApp when conditions are met (e.g., invoice becomes overdue)
+
+def process_monitored_documents(frequency):
+    """
+    Process templates with 'Monitor Documents' mode.
+    
+    Args:
+        frequency: 'Hourly', 'Daily', or 'Weekly'
+    """
+    try:
+        # Get all templates with Monitor Documents mode and matching frequency
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Monitor Documents",
+                "monitoring_frequency": frequency
+            },
+            fields=["name", "doctype_name", "trigger_status", "visual_conditions"]
+        )
+        
+        if not templates:
+            return
+        
+        frappe.logger().info(f"[MONITOR] Processing {len(templates)} templates for {frequency} monitoring")
+        
+        for template_data in templates:
+            try:
+                template = frappe.get_doc("WhatsApp Template", template_data.name)
+                process_single_monitored_template(template)
+            except Exception as e:
+                log_error(
+                    activity_type="Monitor Documents Error",
+                    error=e,
+                    template=template_data.name,
+                    metadata={"frequency": frequency}
+                )
+                continue
+                
+    except Exception as e:
+        frappe.logger().error(f"[MONITOR] Error in process_monitored_documents: {str(e)}")
+
+
+def process_single_monitored_template(template):
+    """
+    Process a single template in Monitor Documents mode.
+    Finds submitted documents that match conditions and sends WhatsApp.
+    """
+    doctype = template.doctype_name
+    
+    log_info(
+        activity_type="Monitor Documents Check Started",
+        template=template.name,
+        metadata={
+            "doctype": doctype,
+            "frequency": template.monitoring_frequency,
+            "trigger_status": template.trigger_status
+        }
+    )
+    
+    # Build filters for submitted documents
+    filters = {
+        "docstatus": 1  # Only submitted documents
+    }
+    
+    # Add status filter if specified
+    if template.trigger_status:
+        filters["status"] = template.trigger_status
+    
+    # Get submitted documents
+    try:
+        docs = frappe.get_all(doctype, filters=filters, fields=["name"], limit=100)
+    except Exception as e:
+        log_error(
+            activity_type="Monitor Documents Query Error",
+            error=e,
+            template=template.name,
+            metadata={"doctype": doctype, "filters": filters}
+        )
+        return
+    
+    if not docs:
+        log_info(
+            activity_type="Monitor Documents No Matches",
+            template=template.name,
+            metadata={"doctype": doctype, "reason": "no_submitted_docs"}
+        )
+        return
+    
+    # Process each document
+    sent_count = 0
+    skipped_count = 0
+    failed_count = 0
+    
+    for doc_data in docs:
+        try:
+            doc = frappe.get_doc(doctype, doc_data.name)
+            
+            # Check visual conditions if specified
+            if template.visual_conditions:
+                if not check_visual_conditions(doc, template.visual_conditions):
+                    skipped_count += 1
+                    continue
+            
+            # Check if already sent to prevent duplicates
+            if was_recently_sent(doc, template.name):
+                skipped_count += 1
+                continue
+            
+            # Send the message
+            result = send_auto_message(doc, template.name)
+            
+            if result:
+                sent_count += 1
+            else:
+                failed_count += 1
+            
+            # Anti-ban delay between sends
+            if sent_count < len(docs):
+                delay = random.randint(10, 30)
+                time.sleep(delay)
+                
+        except Exception as e:
+            log_error(
+                activity_type="Monitor Documents Processing Error",
+                error=e,
+                template=template.name,
+                reference_doctype=doctype,
+                reference_name=doc_data.name
+            )
+            failed_count += 1
+            continue
+    
+    log_success(
+        activity_type="Monitor Documents Check Completed",
+        template=template.name,
+        metadata={
+            "checked": len(docs),
+            "sent": sent_count,
+            "skipped": skipped_count,
+            "failed": failed_count
+        }
+    )
+
+
+def was_recently_sent(doc, template_name, hours=24):
+    """
+    Check if a WhatsApp was already sent for this document/template recently.
+    Prevents duplicate sends for the same condition.
+    """
+    try:
+        from frappe.utils import add_to_date, now_datetime
+        
+        # Check activity log for recent sends
+        recent = frappe.db.get_value("WhatsApp Activity Log",
+            {
+                "template": template_name,
+                "reference_doctype": doc.doctype,
+                "reference_name": doc.name,
+                "activity_type": ["in", ["Auto Send Completed", "Monitor Documents Sent"]],
+                "activity_timestamp": [">=", add_to_date(now_datetime(), hours=-hours)]
+            },
+            "name"
+        )
+        
+        return bool(recent)
+        
+    except Exception as e:
+        frappe.logger().warning(f"[MONITOR] Error checking recent sends: {str(e)}")
+        return False
+
+
+def process_hourly_monitoring():
+    """Process hourly monitoring. Called by scheduler."""
+    process_monitored_documents("Hourly")
+
+
+def process_daily_monitoring():
+    """Process daily monitoring. Called by scheduler."""
+    process_monitored_documents("Daily")
+
+
+def process_weekly_monitoring():
+    """Process weekly monitoring. Called by scheduler."""
+    process_monitored_documents("Weekly")
+
+
+# ===== END MONITOR DOCUMENTS MODE =====
+
+
+# ===== DEAD STOCK MARKETING MODE =====
+
+def process_dead_stock_daily():
+    """
+    Main scheduler function for Dead Stock Marketing.
+    Runs daily and processes all templates with Dead Stock Marketing mode enabled.
+    """
+    try:
+        current_time = frappe.utils.now_datetime().time()
+        
+        # Get all templates with Dead Stock Marketing mode
+        templates = frappe.get_all("WhatsApp Template",
+            filters={
+                "enable_auto_send": 1,
+                "auto_send_mode": "Dead Stock Marketing"
+            },
+            fields=["name", "send_time"]
+        )
+        
+        for template_data in templates:
+            try:
+                template = frappe.get_doc("WhatsApp Template", template_data.name)
+                
+                # Check if it's time to send (within 5 minutes of scheduled time)
+                scheduled_time = frappe.utils.get_time(template.send_time or "11:00:00")
+                time_diff = abs((current_time.hour * 60 + current_time.minute) - 
+                               (scheduled_time.hour * 60 + scheduled_time.minute))
+                
+                if time_diff <= 5:  # Within 5 minutes window
+                    log_info(
+                        activity_type="Dead Stock Campaign Starting",
+                        template=template.name,
+                        metadata={"scheduled_time": str(scheduled_time), "current_time": str(current_time)}
+                    )
+                    
+                    send_dead_stock_campaign(template)
+                    
+            except Exception as e:
+                log_error(
+                    activity_type="Dead Stock Campaign Error",
+                    error=e,
+                    template=template_data.name
+                )
+                continue
+                
+    except Exception as e:
+        frappe.logger().error(f"[DEAD STOCK] Error in process_dead_stock_daily: {str(e)}")
+
+
+def get_dead_stock_items(template):
+    """
+    Get dead stock items based on template configuration.
+    Uses the SQL query from the Slow Moving Items Report.
+    """
+    warehouse = template.dead_stock_warehouse or "JTL - JT"
+    min_days = template.min_days_stagnant or 120
+    
+    sql = """
+        SELECT 
+            b.item_code,
+            i.item_name,
+            i.description,
+            b.warehouse,
+            b.actual_qty as qty,
+            b.valuation_rate as cost,
+            (b.actual_qty * b.valuation_rate) as value,
+            (SELECT MAX(posting_date) 
+             FROM `tabStock Ledger Entry` 
+             WHERE item_code = b.item_code 
+             AND warehouse = b.warehouse
+             AND actual_qty > 0 
+             AND is_cancelled = 0) as last_receipt_date,
+            DATEDIFF(CURDATE(), (
+                SELECT MAX(posting_date) 
+                FROM `tabStock Ledger Entry` 
+                WHERE item_code = b.item_code 
+                AND warehouse = b.warehouse
+                AND actual_qty > 0 
+                AND is_cancelled = 0
+            )) as days_stagnant
+        FROM `tabBin` b
+        JOIN `tabItem` i ON b.item_code = i.name
+        WHERE b.actual_qty > 0
+        AND b.warehouse = %s
+        AND DATEDIFF(CURDATE(), (
+            SELECT MAX(posting_date) 
+            FROM `tabStock Ledger Entry` 
+            WHERE item_code = b.item_code 
+            AND warehouse = b.warehouse
+            AND actual_qty > 0 
+            AND is_cancelled = 0
+        )) >= %s
+        ORDER BY days_stagnant DESC
+    """
+    
+    try:
+        items = frappe.db.sql(sql, (warehouse, min_days), as_dict=True)
+        return items
+    except Exception as e:
+        log_error(
+            activity_type="Dead Stock Query Error",
+            error=e,
+            template=template.name,
+            metadata={"warehouse": warehouse, "min_days": min_days}
+        )
+        return []
+
+
+def get_todays_dead_stock_batch(template):
+    """
+    Get today's batch of dead stock items.
+    Rotates through the list, sending X items per day.
+    """
+    # Get all dead stock items
+    all_items = get_dead_stock_items(template)
+    
+    if not all_items:
+        return [], 0
+    
+    # Update total pool count
+    template.total_items_pool = len(all_items)
+    
+    # Get current position
+    last_index = template.last_sent_index or 0
+    items_per_day = template.items_per_day or 5
+    
+    # Get today's batch
+    today_items = []
+    for i in range(items_per_day):
+        item_index = (last_index + i) % len(all_items)
+        today_items.append(all_items[item_index])
+    
+    # Calculate new index for tomorrow
+    new_index = (last_index + items_per_day) % len(all_items)
+    
+    # Check if we completed a full cycle
+    cycle_completed = False
+    if new_index < last_index or (new_index == 0 and last_index > 0):
+        cycle_completed = True
+        template.cycle_count = (template.cycle_count or 0) + 1
+    
+    # Update tracking fields
+    template.last_sent_index = new_index
+    template.last_send_date = frappe.utils.today()
+    template.save(ignore_permissions=True)
+    frappe.db.commit()
+    
+    log_info(
+        activity_type="Dead Stock Batch Prepared",
+        template=template.name,
+        metadata={
+            "total_items": len(all_items),
+            "batch_size": len(today_items),
+            "last_index": last_index,
+            "new_index": new_index,
+            "cycle_completed": cycle_completed,
+            "cycle_count": template.cycle_count
+        }
+    )
+    
+    return today_items, len(all_items)
+
+
+def get_all_customers_with_phones():
+    """
+    Get all customers with valid mobile numbers.
+    Rechecks each time to ensure we don't miss new customers.
+    """
+    try:
+        customers = frappe.get_all("Customer",
+            filters={
+                "disabled": 0
+            },
+            fields=["name", "customer_name", "mobile_no"]
+        )
+        
+        # Filter customers with valid phone numbers
+        valid_customers = []
+        for cust in customers:
+            if cust.mobile_no and len(cust.mobile_no) >= 8:
+                valid_customers.append(cust)
+        
+        return valid_customers
+        
+    except Exception as e:
+        log_error(
+            activity_type="Customer Query Error",
+            error=e
+        )
+        return []
+
+
+def get_item_image(item_code):
+    """
+    Get item image from Item master or File attachments.
+    Returns base64 encoded image or None.
+    """
+    try:
+        # Get item doc
+        item = frappe.get_doc("Item", item_code)
+        
+        # Check if item has image field
+        if item.image:
+            # Get file by URL
+            file_doc = frappe.get_doc("File", {"file_url": item.image})
+            if file_doc:
+                file_content = file_doc.get_content()
+                if isinstance(file_content, str):
+                    file_content = file_content.encode('utf-8')
+                
+                # Determine mimetype
+                import mimetypes
+                mimetype = mimetypes.guess_type(item.image)[0] or "image/jpeg"
+                
+                return {
+                    "mimetype": mimetype,
+                    "data": base64.b64encode(file_content).decode('utf-8'),
+                    "filename": f"{item_code}.jpg"
+                }
+        
+        # Try to find attached file
+        files = frappe.get_all("File",
+            filters={
+                "attached_to_doctype": "Item",
+                "attached_to_name": item_code
+            },
+            fields=["name", "file_url"],
+            limit=1
+        )
+        
+        if files:
+            file_doc = frappe.get_doc("File", files[0].name)
+            file_content = file_doc.get_content()
+            if isinstance(file_content, str):
+                file_content = file_content.encode('utf-8')
+            
+            import mimetypes
+            mimetype = mimetypes.guess_type(files[0].file_url)[0] or "image/jpeg"
+            
+            return {
+                "mimetype": mimetype,
+                "data": base64.b64encode(file_content).decode('utf-8'),
+                "filename": f"{item_code}.jpg"
+            }
+        
+        return None
+        
+    except Exception as e:
+        frappe.logger().warning(f"[DEAD STOCK] Error getting image for {item_code}: {str(e)}")
+        return None
+
+
+def send_dead_stock_campaign(template):
+    """
+    Send dead stock items to all customers.
+    One message per item per customer with anti-ban protection.
+    """
+    # Get today's dead stock batch
+    today_items, total_pool = get_todays_dead_stock_batch(template)
+    
+    if not today_items:
+        log_warning(
+            activity_type="Dead Stock Campaign",
+            warning_msg="No dead stock items found",
+            template=template.name
+        )
+        return
+    
+    # Get all customers with phones
+    customers = get_all_customers_with_phones()
+    
+    if not customers:
+        log_warning(
+            activity_type="Dead Stock Campaign",
+            warning_msg="No customers with valid phones found",
+            template=template.name
+        )
+        return
+    
+    log_info(
+        activity_type="Dead Stock Campaign Starting",
+        template=template.name,
+        metadata={
+            "items_to_send": len(today_items),
+            "total_customers": len(customers),
+            "total_messages": len(today_items) * len(customers)
+        }
+    )
+    
+    # Track stats
+    total_sent = 0
+    total_failed = 0
+    items_without_images = []
+    
+    # Process each item
+    for item_data in today_items:
+        item_code = item_data.item_code
+        
+        # Get item image if enabled
+        media = None
+        if template.include_item_images:
+            media = get_item_image(item_code)
+            if not media:
+                items_without_images.append(item_code)
+                log_info(
+                    activity_type="Dead Stock Item No Image",
+                    template=template.name,
+                    reference_name=item_code,
+                    metadata={"item_name": item_data.item_name}
+                )
+        
+        # Process each customer
+        for customer in customers:
+            try:
+                # Prepare message with item variables
+                message = template.message
+                
+                # Replace variables
+                message = message.replace("{{ item_code }}", item_code or "")
+                message = message.replace("{{ item_name }}", item_data.item_name or "")
+                message = message.replace("{{ description }}", item_data.description or "")
+                message = message.replace("{{ qty }}", str(item_data.qty or 0))
+                message = message.replace("{{ days_stagnant }}", str(item_data.days_stagnant or 0))
+                message = message.replace("{{ cost }}", str(item_data.cost or 0))
+                message = message.replace("{{ value }}", str(item_data.value or 0))
+                message = message.replace("{{ customer_name }}", customer.customer_name or "")
+                
+                # Send with retry logic (3 attempts)
+                success = False
+                final_error = None
+                
+                for attempt in range(1, 4):
+                    try:
+                        data = {
+                            "userId": "shared_company_session",
+                            "to": customer.mobile_no,
+                            "message": message,
+                            "media": media
+                        }
+                        
+                        result = proxy_to_service("POST", "api/whatsapp/send", data)
+                        
+                        if result.get("status") == "success":
+                            success = True
+                            total_sent += 1
+                            
+                            log_success(
+                                activity_type="Dead Stock Message Sent",
+                                template=template.name,
+                                customer=customer.name,
+                                customer_phone=customer.mobile_no,
+                                reference_name=item_code,
+                                retry_count=attempt
+                            )
+                            break
+                        else:
+                            final_error = result.get("message", "Unknown error")
+                            
+                            if attempt < 3:
+                                delay = random.randint(5, 15)
+                                time.sleep(delay)
+                    
+                    except Exception as e:
+                        final_error = str(e)
+                        if attempt < 3:
+                            delay = random.randint(5, 15)
+                            time.sleep(delay)
+                
+                if not success:
+                    total_failed += 1
+                    log_error(
+                        activity_type="Dead Stock Message Failed",
+                        error=final_error or "Failed after 3 attempts",
+                        template=template.name,
+                        customer=customer.name,
+                        customer_phone=customer.mobile_no,
+                        reference_name=item_code,
+                        retry_count=3
+                    )
+                
+                # Anti-ban delay between customers
+                delay = smart_delay(total_sent, total_failed)
+                time.sleep(delay)
+                
+            except Exception as e:
+                total_failed += 1
+                log_error(
+                    activity_type="Dead Stock Customer Error",
+                    error=e,
+                    template=template.name,
+                    customer=customer.name,
+                    reference_name=item_code
+                )
+                continue
+        
+        # Anti-ban delay between items
+        time.sleep(random.randint(30, 60))
+    
+    # Log campaign completion
+    log_success(
+        activity_type="Dead Stock Campaign Completed",
+        template=template.name,
+        metadata={
+            "total_sent": total_sent,
+            "total_failed": total_failed,
+            "items_processed": len(today_items),
+            "customers_reached": len(customers),
+            "items_without_images": items_without_images
+        }
+    )
+    
+    # Log items without images to WhatsApp Activity Log
+    if items_without_images:
+        log_warning(
+            activity_type="Dead Stock Items Without Images",
+            warning_msg=f"{len(items_without_images)} items sent without images",
+            template=template.name,
+            metadata={
+                "items_without_images": items_without_images,
+                "total_items": len(today_items),
+                "affected_items_count": len(items_without_images)
+            }
+        )
+
+
+@frappe.whitelist()
+def preview_dead_stock_items(template_name):
+    """
+    Preview which dead stock items will be sent.
+    Shows today's batch and tomorrow's batch.
+    """
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        
+        # Get all items
+        all_items = get_dead_stock_items(template)
+        
+        if not all_items:
+            return {
+                "status": "error",
+                "message": "No dead stock items found matching criteria"
+            }
+        
+        # Get today's batch
+        today_items, total = get_todays_dead_stock_batch(template)
+        
+        # Get tomorrow's batch
+        last_index = template.last_sent_index or 0
+        items_per_day = template.items_per_day or 5
+        tomorrow_items = []
+        
+        for i in range(items_per_day):
+            item_index = (last_index + i) % len(all_items)
+            tomorrow_items.append(all_items[item_index])
+        
+        # Get customers count
+        customers = get_all_customers_with_phones()
+        
+        return {
+            "status": "success",
+            "total_items": total,
+            "total_customers": len(customers),
+            "items_per_day": items_per_day,
+            "last_sent_index": template.last_sent_index,
+            "cycle_count": template.cycle_count or 0,
+            "today_batch": today_items,
+            "tomorrow_batch": tomorrow_items
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ===== END DEAD STOCK MARKETING MODE =====
+
+
+# ===== AUTO-SEND MODE EXAMPLES =====
+#
+# MODE 1: On Submit
+# Use when: You want to send WhatsApp immediately when a document is submitted
+# Example: Send welcome message when new Sales Order is submitted
+# Setup: Auto Send Mode = "On Submit"
+#
+# MODE 2: On Status Change  
+# Use when: You want to send when a document status changes to specific value
+# Example: Send message when Invoice status changes to "Paid"
+# Setup: Auto Send Mode = "On Status Change", Trigger Status = "Paid"
+#
+# MODE 3: Monitor Documents ⭐ NEW ⭐
+# Use when: Document is already submitted but you want to check periodically if conditions are met
+# Example: Send payment reminder for invoices that become "Overdue" after due date
+# Example: Send follow-up for unpaid invoices (outstanding_amount > 0)
+# Setup: 
+#   - Auto Send Mode = "Monitor Documents"
+#   - Monitoring Frequency = "Daily" or "Hourly"
+#   - Trigger Status = "Overdue" (optional)
+#   - Filter Conditions: {"rules":[{"field":"outstanding_amount","operator":">","value":0}]}
+#
+# MODE 4: Recurring
+# Use when: You want to send periodic messages to selected customers
+# Example: Send monthly newsletter to selected customers
+# Setup: Auto Send Mode = "Recurring", select customers, set frequency
+#
+# MODE 5: Dead Stock Marketing ⭐ NEW ⭐
+# Use when: You want to automatically promote slow-moving inventory to all customers
+# Example: Daily send top 5 dead stock items (items not sold in 120+ days) to all customers
+# Setup:
+#   - Auto Send Mode = "Dead Stock Marketing"
+#   - Items Per Day = 5
+#   - Warehouse = "JTL - JT"
+#   - Min Days Without Sales = 120
+#   - Send Time = 11:00:00
+#   - Include Item Images = Yes
+#   - Message with variables: {{ item_name }}, {{ item_code }}, {{ description }}, {{ qty }}, {{ days_stagnant }}, {{ cost }}, {{ value }}
+#
+# ===== DEAD STOCK MESSAGE EXAMPLES =====
+#
+# Example 1: Simple Promotion
+# "🔥 CLEARANCE SALE - {{ item_name }}
+#  Code: {{ item_code }}
+#  Available: {{ qty }} units
+#  Price: {{ cost }} د.م
+#  Reply to order now!"
+#
+# Example 2: Urgency Style
+# "⚠️ LAST CHANCE - {{ item_name }}
+#  This item hasn't sold in {{ days_stagnant }} days!
+#  Only {{ qty }} left in stock
+#  Special clearance price: {{ cost }} د.م
+#  Order now before it's gone!"
+#
+# Example 3: Professional
+# "📦 Special Offer: {{ item_name }}
+#  Product Code: {{ item_code }}
+#  Description: {{ description }}
+#  Stock Available: {{ qty }} units
+#  Price: {{ cost }} د.م
+#  Total Value: {{ value }} د.م
+#  Contact us to place your order!"
+#
+# ===== EXAMPLE JSON FILTERS =====
+#
+# 1. Unpaid Invoices (outstanding_amount > 0):
+#    {"rules":[{"field":"outstanding_amount","operator":">","value":0}]}
+#
+# 2. Overdue Invoices (status = Overdue):
+#    {"rules":[{"field":"status","operator":"=","value":"Overdue"}]}
+#
+# 3. High Value Orders (grand_total >= 5000):
+#    {"rules":[{"field":"grand_total","operator":">=","value":5000}]}
+#
+# 4. Unpaid AND Overdue (both conditions):
+#    {"rules":[
+#        {"field":"status","operator":"=","value":"Overdue"},
+#        {"field":"outstanding_amount","operator":">","value":0}
+#    ]}
+#
+# 5. Corporate Customers Only:
+#    {"rules":[{"field":"customer_group","operator":"=","value":"Corporate"}]}
+#
+# 6. Specific Customer:
+#    {"rules":[{"field":"customer","operator":"=","value":"CUST-00001"}]}
+#
+# ===== Supported Operators =====
+#   =   : Equal to
+#   !=  : Not equal to
+#   >   : Greater than
+#   <   : Less than
+#   >=  : Greater than or equal
+#   <=  : Less than or equal
+#   contains      : String contains (case insensitive)
+#   not_contains  : String does not contain
+#   starts_with   : String starts with
+#   ends_with     : String ends with
+#
+# ===== Common Fields by DocType =====
+# Sales Invoice: outstanding_amount, grand_total, due_date, is_paid, customer, status
+# Sales Order: grand_total, customer, delivery_date, per_delivered, per_billed
+# Customer: customer_group, territory, customer_type, disabled
+# Lead: source, status, company_name
+# Quotation: grand_total, customer, valid_till
+#
+# ===== END AUTO-SEND FILTER EXAMPLES =====
 

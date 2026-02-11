@@ -160,13 +160,17 @@ scheduler_events = {
 		"erpnextwats.erpnextwats.api.process_recurring_messages"
 	],
 	"hourly": [
-		"erpnextwats.erpnextwats.api.process_delayed_messages"
+		"erpnextwats.erpnextwats.api.process_delayed_messages",
+		"erpnextwats.erpnextwats.api.process_hourly_monitoring",
+		"erpnextwats.erpnextwats.api.process_dead_stock_daily"
 	],
 	"daily": [
-		"erpnextwats.erpnextwats.api.process_daily_recurring"
+		"erpnextwats.erpnextwats.api.process_daily_recurring",
+		"erpnextwats.erpnextwats.api.process_daily_monitoring"
 	],
 	"weekly": [
-		"erpnextwats.erpnextwats.api.process_weekly_recurring"
+		"erpnextwats.erpnextwats.api.process_weekly_recurring",
+		"erpnextwats.erpnextwats.api.process_weekly_monitoring"
 	],
 	"monthly": [
 		"erpnextwats.erpnextwats.api.process_monthly_recurring",

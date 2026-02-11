@@ -21,12 +21,32 @@
         "auto_send_mode",
         "column_break_1",
         "auto_send_frequency",
+        "monitoring_frequency",
+        "trigger_status",
         "selected_customers_section",
         "selected_customers",
         "conditions_section",
         "visual_conditions",
         "preview_conditions_btn",
         "matching_docs_preview",
+        "condition_examples_section",
+        "condition_examples",
+        "dead_stock_section",
+        "items_per_day",
+        "dead_stock_warehouse",
+        "min_days_stagnant",
+        "column_break_ds1",
+        "send_time",
+        "include_item_images",
+        "dead_stock_preview_section",
+        "preview_dead_stock_btn",
+        "dead_stock_preview_html",
+        "dead_stock_tracking_section",
+        "last_sent_index",
+        "total_items_pool",
+        "column_break_ds2",
+        "cycle_count",
+        "last_send_date",
         "anti_ban_section",
         "hourly_limit",
         "daily_limit",
@@ -109,8 +129,8 @@
             "fieldname": "auto_send_mode",
             "fieldtype": "Select",
             "label": "Send Mode",
-            "options": "\nRecurring\nOn Document Create",
-            "description": "Recurring = Send periodically to selected customers. On Document Create = Send when new document is created."
+            "options": "\nOn Submit\nOn Status Change\nMonitor Documents\nRecurring\nDead Stock Marketing",
+            "description": "On Submit = Send when document is submitted. On Status Change = Send when status changes. Monitor Documents = Periodically check submitted docs. Recurring = Send to selected customers. Dead Stock Marketing = Daily sends of slow-moving items to all customers."
         },
         {
             "fieldname": "column_break_1",
@@ -141,13 +161,133 @@
             "fieldname": "conditions_section",
             "fieldtype": "Section Break",
             "label": "When to Send (Conditions)",
-            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'On Document Create'"
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Submit' || doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
+        },
+        {
+            "fieldname": "trigger_status",
+            "fieldtype": "Data",
+            "label": "Trigger When Status Is",
+            "description": "e.g., 'Unpaid', 'Paid', 'Overdue', 'To Deliver and Bill' - Leave empty to trigger on any status",
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
+        },
+        {
+            "fieldname": "monitoring_frequency",
+            "fieldtype": "Select",
+            "label": "Check Frequency",
+            "options": "\nHourly\nDaily\nWeekly",
+            "default": "Daily",
+            "description": "How often to check submitted documents for condition changes",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Monitor Documents'"
+        },
+        {
+            "fieldname": "dead_stock_section",
+            "fieldtype": "Section Break",
+            "label": "Dead Stock Marketing Settings",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "items_per_day",
+            "fieldtype": "Int",
+            "label": "Items Per Day",
+            "default": "5",
+            "description": "How many dead stock items to send each day",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "dead_stock_warehouse",
+            "fieldtype": "Link",
+            "label": "Warehouse",
+            "options": "Warehouse",
+            "default": "JTL - JT",
+            "description": "Only send items from this warehouse",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "min_days_stagnant",
+            "fieldtype": "Int",
+            "label": "Min Days Without Sales",
+            "default": "120",
+            "description": "Only items not sold for X days or more",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "column_break_ds1",
+            "fieldtype": "Column Break",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "send_time",
+            "fieldtype": "Time",
+            "label": "Send Time",
+            "default": "11:00:00",
+            "description": "Time of day to send (24h format)",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "include_item_images",
+            "fieldtype": "Check",
+            "label": "Include Item Images",
+            "default": "1",
+            "description": "Attach product images if available",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "dead_stock_preview_section",
+            "fieldtype": "Section Break",
+            "label": "Dead Stock Preview",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "preview_dead_stock_btn",
+            "fieldtype": "Button",
+            "label": "Preview Today's Dead Stock Items"
+        },
+        {
+            "fieldname": "dead_stock_preview_html",
+            "fieldtype": "HTML",
+            "label": "Dead Stock Items Preview"
+        },
+        {
+            "fieldname": "dead_stock_tracking_section",
+            "fieldtype": "Section Break",
+            "label": "Campaign Tracking (Auto-populated)"
+        },
+        {
+            "fieldname": "last_sent_index",
+            "fieldtype": "Int",
+            "label": "Last Sent Index",
+            "read_only": 1,
+            "description": "Position in dead stock list (auto-updated)"
+        },
+        {
+            "fieldname": "total_items_pool",
+            "fieldtype": "Int",
+            "label": "Total Items in Pool",
+            "read_only": 1,
+            "description": "Total dead stock items available"
+        },
+        {
+            "fieldname": "column_break_ds2",
+            "fieldtype": "Column Break"
+        },
+        {
+            "fieldname": "cycle_count",
+            "fieldtype": "Int",
+            "label": "Cycles Completed",
+            "read_only": 1,
+            "description": "How many full cycles completed"
+        },
+        {
+            "fieldname": "last_send_date",
+            "fieldtype": "Date",
+            "label": "Last Send Date",
+            "read_only": 1
         },
         {
             "fieldname": "visual_conditions",
             "fieldtype": "JSON",
-            "label": "Conditions",
-            "description": "Define when to send (e.g., when Invoice amount > 1000)"
+            "label": "Filter Conditions (JSON)",
+            "description": "Define filters like: outstanding_amount > 0, grand_total > 1000, etc."
         },
         {
             "fieldname": "preview_conditions_btn",
@@ -158,6 +298,18 @@
             "fieldname": "matching_docs_preview",
             "fieldtype": "HTML",
             "label": "Matching Documents"
+        },
+        {
+            "fieldname": "condition_examples_section",
+            "fieldtype": "Section Break",
+            "label": "Filter Examples",
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'On Submit' || doc.auto_send_mode == 'On Status Change' || doc.auto_send_mode == 'Monitor Documents')"
+        },
+        {
+            "fieldname": "condition_examples",
+            "fieldtype": "HTML",
+            "label": "Examples",
+            "options": "<div style='padding: 15px; background: #f8f9fa; border-radius: 8px;'><h5>Common Filter Examples:</h5><ul><li><strong>Unpaid Invoices:</strong> <code>{\"rules\":[{\"field\":\"outstanding_amount\",\"operator\":\">\",\"value\":0}]}</code> - Use with 'Monitor Documents' mode to check for unpaid invoices daily</li><li><strong>Overdue Invoices:</strong> <code>{\"rules\":[{\"field\":\"status\",\"operator\":\"=\",\"value\":\"Overdue\"}]}</code> - Use with 'Monitor Documents' mode + Trigger Status = Overdue</li><li><strong>High Value Orders:</strong> <code>{\"rules\":[{\"field\":\"grand_total\",\"operator\":\">=\",\"value\":5000}]}</code></li><li><strong>Specific Customer Group:</strong> <code>{\"rules\":[{\"field\":\"customer_group\",\"operator\":\"=\",\"value\":\"Corporate\"}]}</code></li></ul><h6 style='margin-top: 15px;'>When to use Monitor Documents mode:</h6><p style='color: #666;'>Use this mode when you want to check already-submitted documents periodically. For example: "Check every day for Sales Invoices that became Overdue" or "Check hourly for unpaid invoices".</p></div>"
         },
         {
             "fieldname": "anti_ban_section",
