@@ -64,19 +64,37 @@ def get_rendering_context(doc):
         
     return ctx
 
-def smart_delay(sent_count=0, failed_count=0):
-    """Adaptive delay to prevent WhatsApp account ban."""
-    # Base delay 5-15 seconds
-    base = random.randint(5, 15)
+# Adaptive delay to prevent WhatsApp account ban.
+def smart_delay(sent_count=0, failed_count=0, is_mass_campaign=True):
+    # Total sent today across all modes (for global quota tracking)
+    # We use frappe.cache to store transient hourly count
+    current_hour = now_datetime().strftime("%Y-%m-%d-%H")
+    cache_key = f"whatsapp_sent_hour_{current_hour}"
     
-    # Scale based on failure rate
-    total = sent_count + failed_count
-    if total > 0:
-        failure_rate = failed_count / total
-        if failure_rate > 0.1: # >10% failure
-            base += random.randint(20, 60)
+    # Increment global counter
+    frappe.cache().incrby(cache_key, 1)
+    
+    if not is_mass_campaign:
+        # Transactional messages get fast lanes
+        return random.randint(3, 7) + random.random()
+
+    # Base delay for mass campaigns (20-45 seconds)
+    base = random.randint(20, 45)
+    
+    # "Human Breaks" every 30 messages in a batch
+    if sent_count > 0 and sent_count % 30 == 0:
+        # Long break 10-20 minutes
+        break_duration = random.randint(600, 1200)
+        log_info(
+            activity_type="Retry Attempt",
+            metadata={"action": "stealth_human_break", "duration_seconds": break_duration, "sent_in_batch": sent_count}
+        )
+        time.sleep(break_duration)
+    
+    # Random 10% chance of a "mini break" (2-3 minutes)
+    if random.random() < 0.1:
+        time.sleep(random.randint(120, 180))
             
-    # Add randomness
     return base + random.random()
 
 def validate_gateway_and_session():
@@ -208,6 +226,127 @@ def log_whatsapp_activity(
     except Exception as e:
         frappe.logger().error(f"Failed to log WhatsApp activity: {str(e)}")
         return None
+
+@frappe.whitelist()
+def get_whatsapp_dashboard_stats():
+    """Returns statistics for the WhatsApp Dashboard."""
+    try:
+        from frappe.utils import today, add_to_date
+        
+        # Today's stats
+        today_date = today()
+        
+        # Message counts
+        today_total = frappe.db.count("WhatsApp Activity Log", {
+            "activity_date": today_date,
+            "activity_category": "Message"
+        })
+        
+        today_success = frappe.db.count("WhatsApp Activity Log", {
+            "activity_date": today_date,
+            "activity_category": "Message",
+            "status": "Success"
+        })
+        
+        today_failed = frappe.db.count("WhatsApp Activity Log", {
+            "activity_date": today_date,
+            "activity_category": "Message",
+            "status": ["in", ["Failed", "Error"]]
+        })
+        
+        # Error counts (from all categories)
+        today_errors = frappe.db.count("WhatsApp Activity Log", {
+            "activity_date": today_date,
+            "status": "Error"
+        })
+        
+        # Bulk sends started today
+        today_bulk = frappe.db.count("WhatsApp Activity Log", {
+            "activity_date": today_date,
+            "activity_type": "Bulk Send Started"
+        })
+        
+        # Get latest session status
+        latest_session = None
+        try:
+            status_res = proxy_to_service("GET", "api/whatsapp/status")
+            latest_session = {"status": status_res.get("status", "unknown")}
+        except:
+            latest_session = {"status": "error"}
+            
+        # Recent errors (last 24h)
+        recent_errors = frappe.get_all("WhatsApp Activity Log",
+            filters={
+                "status": "Error",
+                "activity_timestamp": [">", add_to_date(now_datetime(), hours=-24)]
+            },
+            limit=10,
+            order_by="activity_timestamp desc"
+        )
+        
+        return {
+            "status": "success",
+            "today": {
+                "messages": today_total,
+                "total": today_total,
+                "success": today_success,
+                "failed": today_failed,
+                "errors": today_errors,
+                "bulk_sends": today_bulk
+            },
+            "latest_session": latest_session,
+            "recent_errors": recent_errors
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def get_whatsapp_logs(limit=50, activity_category=None, status=None):
+    """Returns recent WhatsApp logs with filtering."""
+    try:
+        filters = {}
+        if activity_category:
+            filters["activity_category"] = activity_category
+        if status:
+            filters["status"] = status
+            
+        logs = frappe.get_all("WhatsApp Activity Log",
+            filters=filters,
+            fields=["name", "activity_timestamp", "activity_type", "status", "user", "user_name", "customer", "template", "reference_name", "duration_ms"],
+            limit=limit,
+            order_by="activity_timestamp desc"
+        )
+        
+        return {
+            "status": "success",
+            "logs": logs
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def check_global_quota(is_mass_campaign=True):
+    """Checks if we are exceeding the safe hourly quota (150/hr)."""
+    current_hour = now_datetime().strftime("%Y-%m-%d-%H")
+    cache_key = f"whatsapp_sent_hour_{current_hour}"
+    sent_this_hour = frappe.utils.cint(frappe.cache().get(cache_key))
+    
+    max_quota = 150
+    if is_mass_campaign:
+        max_quota = 120 # Save 30 slots for transactional
+        
+    return sent_this_hour < max_quota
+
+def is_campaign_type_allowed_today(mode):
+    """Interleaving logic: alternate campaigns by day of year."""
+    from datetime import datetime
+    day_of_year = datetime.now().timetuple().tm_yday
+    
+    if mode == "Dead Stock Marketing":
+        return day_of_year % 2 == 0
+    if mode == "Monitor Documents":
+        return day_of_year % 2 != 0
+        
+    return True # Transactional/Recurring always allowed or handled elsewhere
 
 def validate_phone_medium(phone):
     """Simple phone validation for bulk sending."""
@@ -915,7 +1054,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                         
                         # Wait with smart delay before retrying SAME customer
                         if attempt < 3:
-                            delay = smart_delay(sent_count, failed_count)
+                            delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                             log_message(f"Waiting {delay}s before retry...")
                             time.sleep(delay)
                 
@@ -926,7 +1065,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                     customer_result["error"] = error_msg
                     
                     if attempt < 3:
-                        delay = smart_delay(sent_count, failed_count)
+                        delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                         log_message(f"Waiting {delay}s before retry...")
                         time.sleep(delay)
             
@@ -950,7 +1089,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
             
             # Smart delay before next customer (if not last)
             if idx < len(doc_names) - 1:
-                delay = smart_delay(sent_count, failed_count)
+                delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                 log_message(f"Waiting {delay}s before next customer...")
                 time.sleep(delay)
         
@@ -1734,6 +1873,8 @@ def send_auto_message(doc, template_name):
                     "auto_send": True
                 }
             )
+            # Transactional messages get fast lanes but still increment quota
+            time.sleep(smart_delay(is_mass_campaign=False))
         else:
             log_error(
                 activity_type="Auto Send Failed",
@@ -2148,7 +2289,7 @@ def process_weekly_recurring():
                 'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
                 template_name=template_data.name,
                 queue='long',
-                timeout=7200
+                timeout=72000
             )
     except Exception as e:
         frappe.logger().error(f"[AUTO-SEND] Error in process_weekly_recurring: {str(e)}")
@@ -2171,7 +2312,7 @@ def process_monthly_recurring_enhanced():
                 'erpnextwats.erpnextwats.api.process_recurring_to_selected_customers',
                 template_name=template_data.name,
                 queue='long',
-                timeout=7200
+                timeout=72000
             )
     except Exception as e:
         frappe.logger().error(f"[AUTO-SEND] Error in process_monthly_recurring_enhanced: {str(e)}")
@@ -2460,15 +2601,25 @@ def process_monitored_documents(frequency):
                 "enable_auto_send": 1,
                 "auto_send_mode": "Monitor Documents"
             },
-            fields=["name", "monitoring_frequency", "custom_monitoring_interval", "last_monitoring_run"]
+            fields=["name", "monitoring_frequency", "custom_monitoring_interval", "last_monitoring_run", "send_time"]
         )
         
         if not templates:
             return
             
+        current_time = now_datetime().time()
+            
         # Filter templates by frequency
         run_templates = []
         for t in templates:
+            # Check for specific send time if frequency is Daily
+            if frequency == "Daily" and t.send_time:
+                scheduled_time = frappe.utils.get_time(t.send_time)
+                # 1 hour window for daily tasks if triggered by daily/hourly scheduler
+                # If moved to 'all' scheduler, we could use a tighter window
+                if not (scheduled_time.hour == current_time.hour):
+                    continue
+
             if t.monitoring_frequency == frequency:
                 run_templates.append(t)
             elif t.monitoring_frequency == "Customize" and frequency == "Daily":
@@ -2488,7 +2639,13 @@ def process_monitored_documents(frequency):
         for template_data in run_templates:
             try:
                 template = frappe.get_doc("WhatsApp Template", template_data.name)
-                process_single_monitored_template(template)
+                # Enqueue single template check to handle high volume customers
+                frappe.enqueue(
+                    'erpnextwats.erpnextwats.api.process_single_monitored_template',
+                    template=template,
+                    queue='long',
+                    timeout=72000
+                )
                 
                 # Update last run
                 template.last_monitoring_run = now_datetime()
@@ -2653,7 +2810,8 @@ def was_dead_stock_sent_today(item_code, customer_name, template_name):
             "template": template_name,
             "reference_name": item_code,
             "customer": customer_name,
-            "activity_type": ["in", ["Message Sent", "Message Failed"]],
+            "activity_type": "Message Sent",
+            "status": "Success",
             "activity_date": today()
         })
     except:
@@ -2667,6 +2825,11 @@ def process_hourly_monitoring():
 
 def process_daily_monitoring():
     """Process daily monitoring. Called by scheduler."""
+    # Interleaving Check: only run on ODD days of the year
+    if not is_campaign_type_allowed_today("Monitor Documents"):
+        frappe.logger().info("[MONITOR] Skipping today (Even day - Dead Stock rotation)")
+        return
+
     process_monitored_documents("Daily")
 
 
@@ -2685,6 +2848,11 @@ def process_dead_stock_daily():
     Main scheduler function for Dead Stock Marketing.
     Runs daily and processes all templates with Dead Stock Marketing mode enabled.
     """
+    # Interleaving Check: only run on EVEN days of the year
+    if not is_campaign_type_allowed_today("Dead Stock Marketing"):
+        frappe.logger().info("[DEAD STOCK] Skipping today (Odd day - Monitor Documents rotation)")
+        return
+
     try:
         current_time = frappe.utils.now_datetime().time()
         
@@ -2713,7 +2881,13 @@ def process_dead_stock_daily():
                         metadata={"action": "dead_stock_campaign_start", "scheduled_time": str(scheduled_time), "current_time": str(current_time)}
                     )
                     
-                    send_dead_stock_campaign(template)
+                    # Enqueue in background with long timeout to avoid stalling the scheduler
+                    frappe.enqueue(
+                        'erpnextwats.erpnextwats.api.send_dead_stock_campaign',
+                        template=template,
+                        queue='long',
+                        timeout=72000
+                    )
                     
             except Exception as e:
                 log_error(
@@ -2744,6 +2918,7 @@ def get_dead_stock_items(template):
             b.warehouse,
             b.actual_qty as qty,
             b.valuation_rate as cost,
+            i.standard_rate as standard_rate,
             (b.actual_qty * b.valuation_rate) as value,
             (SELECT MAX(posting_date) 
              FROM `tabStock Ledger Entry` 
@@ -2953,34 +3128,42 @@ def send_dead_stock_campaign(template):
     total_sent = 0
     total_failed = 0
     items_without_images = []
+    include_images = template.include_item_images
     
-    # Process each item
-    for item_data in today_items:
-        item_code = item_data.item_code
-        
-        # Get item image if enabled
-        media = None
-        if template.include_item_images:
-            media = get_item_image(item_code)
-            if not media:
-                items_without_images.append(item_code)
-                log_info(
-                    activity_type="",
-                    template=template.name,
-                    reference_name=item_code,
-                    metadata={"action": "dead_stock_item_no_image", "item_name": item_data.item_name}
-                )
-        
-        # Process each customer
-        for customer in customers:
+    # Process each customer (Cluster mode)
+    for cust_idx, customer in enumerate(customers):
+        # Cluster delay between customers (3-5 minutes) for stealth
+        if cust_idx > 0:
+            cluster_delay = random.randint(180, 300)
+            log_info(
+                activity_type="Retry Attempt",
+                metadata={"action": "stealth_customer_gap", "duration_seconds": cluster_delay, "customer": customer.name}
+            )
+            time.sleep(cluster_delay)
+
+        # Process the batch for this customer
+        for item_data in today_items:
+            item_code = item_data.item_code
+            
+            # Quota Check: if we hit 120/hr, we must wait or abort
+            # In background jobs, we'll just sleep 2 minutes and retry check
+            while not check_global_quota(is_mass_campaign=True):
+                time.sleep(120)
+
             # Check if this item + customer combo was already sent today
-            # Allows resuming if the task stopped partially
             if was_dead_stock_sent_today(item_code, customer.name, template.name):
-                total_sent += 1 # Count as sent for progress reporting
+                total_sent += 1
                 continue
 
             try:
-                # Prepare message with item variables using Jinja for robustness
+                # Get item image if enabled
+                media = None
+                if include_images:
+                    media = get_item_image(item_code)
+                    if not media:
+                        items_without_images.append(item_code)
+
+                # Prepare message context with Sell Rate
                 ctx = {
                     "item_code": item_code,
                     "item_name": item_data.item_name,
@@ -2988,7 +3171,7 @@ def send_dead_stock_campaign(template):
                     "qty": item_data.qty,
                     "days_stagnant": item_data.days_stagnant,
                     "cost": item_data.cost,
-                    "Rate": item_data.cost,
+                    "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
                     "value": item_data.value,
                     "customer_name": customer.customer_name,
                     "frappe": frappe,
@@ -2997,7 +3180,7 @@ def send_dead_stock_campaign(template):
                 }
                 message = frappe.render_template(template.message, ctx)
                 
-                # Send with retry logic (3 attempts)
+                # Send with retry logic
                 success = False
                 final_error = None
                 
@@ -3023,56 +3206,32 @@ def send_dead_stock_campaign(template):
                                 customer_phone=customer.mobile_no,
                                 reference_name=item_code,
                                 retry_count=attempt,
-                                metadata={"send_type": "dead_stock"}
+                                metadata={"send_type": "dead_stock", "price_used": ctx["Rate"]}
                             )
                             break
                         else:
                             final_error = result.get("message", "Unknown error")
-                            
-                            if attempt < 3:
-                                delay = random.randint(5, 15)
-                                time.sleep(delay)
+                            time.sleep(random.randint(5, 15))
                     
                     except Exception as e:
                         final_error = str(e)
-                        if attempt < 3:
-                            delay = random.randint(5, 15)
-                            time.sleep(delay)
+                        time.sleep(random.randint(5, 15))
                 
                 if not success:
                     total_failed += 1
-                    log_error(
-                        activity_type="Message Failed",
-                        error=final_error or "Failed after 3 attempts",
-                        template=template.name,
-                        customer=customer.name,
-                        customer_phone=customer.mobile_no,
-                        reference_name=item_code,
-                        retry_count=3,
-                        metadata={"total_attempts": 3, "send_type": "dead_stock"}
-                    )
                 
-                # Anti-ban delay between customers
-                delay = smart_delay(total_sent, total_failed)
+                # Anti-ban delay between items in a cluster (20-45s)
+                delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
                 time.sleep(delay)
                 
             except Exception as e:
                 total_failed += 1
-                log_error(
-                    activity_type="Message Failed",
-                    error=e,
-                    template=template.name,
-                    customer=customer.name,
-                    reference_name=item_code,
-                    metadata={"error_type": "Dead Stock Customer Processing Error"}
-                )
-                continue
-        
-        # Anti-ban delay between items
-        time.sleep(random.randint(10, 30))
-    
-    # Campaign finished successfully (or reached end of items)
-    # Update tracking fields on the template
+                log_error(activity_type="Message Failed", error=e, template=template.name, customer=customer.name)
+
+        # Commit progress after each customer to ensure resumability
+        frappe.db.commit()
+
+    # Campaign finished
     template.total_items_pool = total_pool
     template.last_sent_index = next_index
     template.last_send_date = frappe.utils.today()
@@ -3167,9 +3326,9 @@ def run_monitor_check_now(template_name):
             'erpnextwats.erpnextwats.api.process_single_monitored_template',
             template=template,
             queue='long',
-            timeout=3600
+            timeout=72000
         )
-        return {"status": "success", "message": "Monitor check started in the background"}
+        return {"status": "success", "message": "Monitor check started in the background (20h timeout)"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -3187,9 +3346,9 @@ def run_dead_stock_campaign_now(template_name):
             'erpnextwats.erpnextwats.api.send_dead_stock_campaign',
             template=template,
             queue='long',
-            timeout=7200
+            timeout=72000
         )
-        return {"status": "success", "message": "Dead stock campaign started in the background"}
+        return {"status": "success", "message": "Dead stock campaign started in the background (20h timeout)"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

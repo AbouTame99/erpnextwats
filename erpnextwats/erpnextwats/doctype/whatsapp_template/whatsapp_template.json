@@ -231,7 +231,7 @@
             "label": "Send Time",
             "default": "11:00:00",
             "description": "Time of day to send (24h format)",
-            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+            "depends_on": "eval:doc.enable_auto_send && (doc.auto_send_mode == 'Dead Stock Marketing' || doc.auto_send_mode == 'Monitor Documents')"
         },
         {
             "fieldname": "include_item_images",
