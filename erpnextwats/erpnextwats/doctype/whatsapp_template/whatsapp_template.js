@@ -7,6 +7,43 @@ frappe.ui.form.on('WhatsApp Template', {
         if (frm.doc.auto_send_mode === 'Dead Stock Marketing') {
             frm.trigger('preview_dead_stock_btn');
         }
+
+        // Add Manual Run buttons
+        if (frm.doc.enable_auto_send) {
+            if (frm.doc.auto_send_mode === 'Monitor Documents') {
+                frm.add_custom_button(__('Run Monitor Check Now'), function () {
+                    frappe.call({
+                        method: 'erpnextwats.erpnextwats.api.run_monitor_check_now',
+                        args: { template_name: frm.doc.name },
+                        callback: function (r) {
+                            if (r.message && r.message.status === 'success') {
+                                frappe.show_alert({
+                                    message: __('Monitor check started in the background'),
+                                    indicator: 'green'
+                                });
+                            }
+                        }
+                    });
+                }).addClass('btn-primary');
+            } else if (frm.doc.auto_send_mode === 'Dead Stock Marketing') {
+                frm.add_custom_button(__('Run Dead Stock Campaign Now'), function () {
+                    frappe.confirm(__('Start Dead Stock campaign now for all customers?'), function () {
+                        frappe.call({
+                            method: 'erpnextwats.erpnextwats.api.run_dead_stock_campaign_now',
+                            args: { template_name: frm.doc.name },
+                            callback: function (r) {
+                                if (r.message && r.message.status === 'success') {
+                                    frappe.show_alert({
+                                        message: __('Dead stock campaign started in background'),
+                                        indicator: 'green'
+                                    });
+                                }
+                            }
+                        });
+                    });
+                }).addClass('btn-primary');
+            }
+        }
     },
 
     doctype_name: function (frm) {

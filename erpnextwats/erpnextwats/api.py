@@ -57,6 +57,11 @@ def get_rendering_context(doc):
         "today": frappe.utils.today(),
         "now": frappe.utils.now()
     }
+    
+    # Add Item-specific aliases for better template experience
+    if doc.doctype == "Item":
+        ctx["Rate"] = getattr(doc, "valuation_rate", 0) or getattr(doc, "standard_rate", 0)
+        
     return ctx
 
 def smart_delay(sent_count=0, failed_count=0):
@@ -2620,13 +2625,14 @@ def was_recently_sent(doc, template_name, hours=24):
     try:
         from frappe.utils import add_to_date, now_datetime
         
-        # Check activity log for recent sends
+        # Check activity log for recent entries (any status)
+        # We check Sent and Failed to prevent infinite retry loops in a single run
         recent = frappe.db.get_value("WhatsApp Activity Log",
             {
                 "template": template_name,
                 "reference_doctype": doc.doctype,
                 "reference_name": doc.name,
-                "activity_type": ["in", ["Auto Send Completed"]],
+                "activity_type": ["in", ["Auto Send Completed", "Message Sent", "Message Failed"]],
                 "activity_timestamp": [">=", add_to_date(now_datetime(), hours=-hours)]
             },
             "name"
@@ -2636,6 +2642,21 @@ def was_recently_sent(doc, template_name, hours=24):
         
     except Exception as e:
         frappe.logger().warning(f"[MONITOR] Error checking recent sends: {str(e)}")
+        return False
+
+
+def was_dead_stock_sent_today(item_code, customer_name, template_name):
+    """Check if this item was already sent to this customer today."""
+    try:
+        from frappe.utils import today
+        return frappe.db.exists("WhatsApp Activity Log", {
+            "template": template_name,
+            "reference_name": item_code,
+            "customer": customer_name,
+            "activity_type": ["in", ["Message Sent", "Message Failed"]],
+            "activity_date": today()
+        })
+    except:
         return False
 
 
@@ -2767,19 +2788,16 @@ def get_dead_stock_items(template):
         return []
 
 
-def get_todays_dead_stock_batch(template, is_preview=False):
+def get_todays_dead_stock_batch(template):
     """
-    Get today's batch of dead stock items.
-    Rotates through the list, sending X items per day.
+    Get today's batch of dead stock items and calculation for next state.
+    Does NOT update the database; caller must save if batch is successful.
     """
     # Get all dead stock items
     all_items = get_dead_stock_items(template)
     
     if not all_items:
-        return [], 0
-    
-    # Update total pool count
-    template.total_items_pool = len(all_items)
+        return [], 0, template.last_sent_index or 0, template.cycle_count or 0
     
     # Get current position
     last_index = template.last_sent_index or 0
@@ -2795,36 +2813,11 @@ def get_todays_dead_stock_batch(template, is_preview=False):
     new_index = (last_index + items_per_day) % len(all_items)
     
     # Check if we completed a full cycle
-    cycle_completed = False
     new_cycle_count = template.cycle_count or 0
     if new_index < last_index or (new_index == 0 and last_index > 0):
-        cycle_completed = True
         new_cycle_count += 1
     
-    if not is_preview:
-        # Update tracking fields only if not a preview
-        template.last_sent_index = new_index
-        template.last_send_date = frappe.utils.today()
-        template.cycle_count = new_cycle_count
-        template.save(ignore_permissions=True)
-        frappe.db.commit()
-    
-    log_info(
-        activity_type="",
-        template=template.name,
-        metadata={
-            "action": "dead_stock_batch_prepared",
-            "total_items": len(all_items),
-            "batch_size": len(today_items),
-            "last_index": last_index,
-            "new_index": new_index,
-            "cycle_completed": cycle_completed,
-            "cycle_count": new_cycle_count,
-            "is_preview": is_preview
-        }
-    )
-    
-    return today_items, len(all_items)
+    return today_items, len(all_items), new_index, new_cycle_count
 
 
 def get_all_customers_with_phones():
@@ -2921,9 +2914,10 @@ def send_dead_stock_campaign(template):
     """
     Send dead stock items to all customers.
     One message per item per customer with anti-ban protection.
+    Resumable: if interrupted, skips already-sent recipients for today.
     """
-    # Get today's dead stock batch
-    today_items, total_pool = get_todays_dead_stock_batch(template, is_preview=False)
+    # Get today's dead stock batch and potential next state
+    today_items, total_pool, next_index, next_cycle = get_todays_dead_stock_batch(template)
     
     if not today_items:
         log_warning(
@@ -2979,6 +2973,12 @@ def send_dead_stock_campaign(template):
         
         # Process each customer
         for customer in customers:
+            # Check if this item + customer combo was already sent today
+            # Allows resuming if the task stopped partially
+            if was_dead_stock_sent_today(item_code, customer.name, template.name):
+                total_sent += 1 # Count as sent for progress reporting
+                continue
+
             try:
                 # Prepare message with item variables using Jinja for robustness
                 ctx = {
@@ -2988,6 +2988,7 @@ def send_dead_stock_campaign(template):
                     "qty": item_data.qty,
                     "days_stagnant": item_data.days_stagnant,
                     "cost": item_data.cost,
+                    "Rate": item_data.cost,
                     "value": item_data.value,
                     "customer_name": customer.customer_name,
                     "frappe": frappe,
@@ -3068,9 +3069,16 @@ def send_dead_stock_campaign(template):
                 continue
         
         # Anti-ban delay between items
-        time.sleep(random.randint(30, 60))
+        time.sleep(random.randint(10, 30))
     
-    # Log campaign completion
+    # Campaign finished successfully (or reached end of items)
+    # Update tracking fields on the template
+    template.total_items_pool = total_pool
+    template.last_sent_index = next_index
+    template.last_send_date = frappe.utils.today()
+    template.cycle_count = next_cycle
+    template.save(ignore_permissions=True)
+    frappe.db.commit()
     log_success(
         activity_type="Bulk Send Completed",
         template=template.name,
@@ -3118,7 +3126,7 @@ def preview_dead_stock_items(template_name):
             }
         
         # Get today's batch
-        today_items, total = get_todays_dead_stock_batch(template, is_preview=True)
+        today_items, total, _, _ = get_todays_dead_stock_batch(template)
         
         # Get tomorrow's batch
         last_index = template.last_sent_index or 0
@@ -3143,6 +3151,45 @@ def preview_dead_stock_items(template_name):
             "tomorrow_batch": tomorrow_items
         }
         
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def run_monitor_check_now(template_name):
+    """Manually trigger a Monitor Documents check for a template."""
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        if template.auto_send_mode != "Monitor Documents":
+            return {"status": "error", "message": "Template is not in Monitor Documents mode"}
+            
+        # Run in background to avoid timeout
+        frappe.enqueue(
+            'erpnextwats.erpnextwats.api.process_single_monitored_template',
+            template=template,
+            queue='long',
+            timeout=3600
+        )
+        return {"status": "success", "message": "Monitor check started in the background"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def run_dead_stock_campaign_now(template_name):
+    """Manually trigger a Dead Stock campaign for a template."""
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        if template.auto_send_mode != "Dead Stock Marketing":
+            return {"status": "error", "message": "Template is not in Dead Stock Marketing mode"}
+            
+        # Run in background
+        frappe.enqueue(
+            'erpnextwats.erpnextwats.api.send_dead_stock_campaign',
+            template=template,
+            queue='long',
+            timeout=7200
+        )
+        return {"status": "success", "message": "Dead stock campaign started in the background"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
