@@ -3165,6 +3165,7 @@ def send_dead_stock_campaign(template):
                         "days_stagnant": item_data.days_stagnant,
                         "cost": item_data.cost,
                         "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
                         "value": item_data.value
                     })
 
@@ -3252,6 +3253,7 @@ def send_dead_stock_campaign(template):
                         "days_stagnant": item_data.days_stagnant,
                         "cost": item_data.cost,
                         "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
                         "value": item_data.value,
                         "customer_name": customer.customer_name,
                         "frappe": frappe,
@@ -3470,6 +3472,7 @@ def test_dead_stock_send(template_name, phone):
                         "days_stagnant": item_data.days_stagnant,
                         "cost": item_data.cost,
                         "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
                         "value": item_data.value
                     })
 
@@ -3533,6 +3536,7 @@ def test_dead_stock_send(template_name, phone):
                         "days_stagnant": item_data.days_stagnant,
                         "cost": item_data.cost,
                         "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
                         "value": item_data.value,
                         "customer_name": "Test Customer",
                         "frappe": frappe,
