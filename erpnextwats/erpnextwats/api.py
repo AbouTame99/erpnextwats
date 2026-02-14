@@ -18,9 +18,14 @@ from erpnext.accounts.utils import get_balance_on
 # ===== CORE INFRASTRUCTURE =====
 
 @frappe.whitelist()
-def proxy_to_service(method, endpoint, data=None):
+def proxy_to_service(method, endpoint=None, data=None, **kwargs):
     """Proxies request to the Node.js WhatsApp gateway."""
-    url = f"http://localhost:3000/{endpoint.lstrip('/')}"
+    # Support 'path' alias from JS calls
+    path = endpoint or kwargs.get('path')
+    if not path:
+        frappe.throw("Missing endpoint/path parameter")
+        
+    url = f"http://localhost:3000/{path.lstrip('/')}"
     try:
         if method.upper() == "POST":
             response = requests.post(url, json=data, timeout=60)
