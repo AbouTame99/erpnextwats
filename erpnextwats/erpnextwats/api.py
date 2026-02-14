@@ -108,6 +108,30 @@ def smart_delay(sent_count=0, failed_count=0, is_mass_campaign=True):
             
     return base + random.random()
 
+def send_message_direct(to, message, template=None, media=None):
+    """
+    Direct helper to send a WhatsApp message with optional media.
+    Used for Greeting, Footer, and Sequential Bubbles.
+    """
+    try:
+        data = {
+            "userId": "shared_company_session",
+            "to": to,
+            "message": message,
+            "media": media
+        }
+        # If it's an image, the bridge usually maps 'message' to the caption automatically.
+        # However, we'll explicitly log it.
+        if media:
+            frappe.logger().info(f"[WHATSAPP] Sending media bubble to {to} with caption length {len(message) if message else 0}")
+            
+        result = proxy_to_service("POST", "api/whatsapp/send", data)
+        return result
+    except Exception as e:
+        frappe.logger().error(f"send_message_direct failed: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
 def validate_gateway_and_session():
     """Checks if gateway is up and WhatsApp is connected."""
     try:
@@ -3349,6 +3373,8 @@ def send_dead_stock_campaign(template):
                     media = None
                     if include_images:
                         media = get_item_image(item_code)
+                        if not media:
+                            frappe.logger().warning(f"[DEAD STOCK] No image found for {item_code} in sequential loop")
 
                     item_ctx = {
                         "item_code": item_code,
@@ -3366,29 +3392,33 @@ def send_dead_stock_campaign(template):
                         "now": now_datetime()
                     }
                     
-                    # Render item bubble
+                    # Render item bubble (this will be the caption)
                     item_rendered = frappe.render_template(item_row_tpl or template.message, item_ctx)
                     
-                    # Send item bubble
-                    data = {
-                        "userId": "shared_company_session",
-                        "to": customer.mobile_no,
-                        "message": item_rendered,
-                        "media": media
-                    }
-                    result = proxy_to_service("POST", "api/whatsapp/send", data)
+                    # Send item bubble with caption
+                    result = send_message_direct(customer.mobile_no, item_rendered, template, media)
                     
                     if result.get("status") == "success":
                         total_sent += 1
+                        log_success(
+                            activity_type="Message Sent",
+                            template=template.name,
+                            customer=customer.name,
+                            customer_phone=customer.mobile_no,
+                            reference_name=item_code,
+                            metadata={"send_type": "dead_stock_sequential", "items_idx": idx}
+                        )
                     else:
                         total_failed += 1
+                        log_error(activity_type="Message Failed", error=result.get("message"), template=template.name, customer=customer.name)
                     
                     # Send divider between items (except after last)
                     if idx < len(today_items) - 1:
-                        time.sleep(1)
+                        time.sleep(1.5)
                         send_message_direct(customer.mobile_no, "----------------", template)
                     
-                    time.sleep(random.randint(2, 4))
+                    # Increased delay for media stability (5-8 seconds)
+                    time.sleep(random.randint(5, 8))
 
                 # 3. Send Footer
                 if footer_tpl:
@@ -3736,27 +3766,21 @@ def test_dead_stock_send(template_name, phone):
                     
                     item_rendered = frappe.render_template(item_row_tpl or template.message, item_ctx)
                     
-                    data = {
-                        "userId": "shared_company_session",
-                        "to": validated_phone,
-                        "message": item_rendered,
-                        "media": media
-                    }
-                    result = proxy_to_service("POST", "api/whatsapp/send", data)
+                    result = send_message_direct(validated_phone, item_rendered, template, media)
                     
                     if result.get("status") == "success":
                         sent += 1
                         results.append({"item": item_code, "status": "sent"})
                     else:
                         failed += 1
-                        results.append({"item": item_code, "status": "failed"})
+                        results.append({"item": item_code, "status": "failed", "error": result.get("message")})
                     
                     # Divider
                     if idx < len(today_items) - 1:
                         time.sleep(1)
                         send_message_direct(validated_phone, "----------------", template)
                     
-                    time.sleep(2)
+                    time.sleep(4)
 
                 # 3. Send Footer
                 if footer_tpl:
