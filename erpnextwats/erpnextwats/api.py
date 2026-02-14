@@ -17,6 +17,7 @@ from erpnext.accounts.utils import get_balance_on
 
 # ===== CORE INFRASTRUCTURE =====
 
+@frappe.whitelist()
 def proxy_to_service(method, endpoint, data=None):
     """Proxies request to the Node.js WhatsApp gateway."""
     url = f"http://localhost:3000/{endpoint.lstrip('/')}"
@@ -3049,7 +3050,7 @@ def get_item_image(item_code):
                 
                 return {
                     "mimetype": mimetype,
-                    "data": base64.b64encode(file_content).decode('utf-8'),
+                    "data": f"data:{mimetype};base64,{base64.b64encode(file_content).decode('utf-8')}",
                     "filename": f"{item_code}.jpg"
                 }
         
@@ -3074,7 +3075,7 @@ def get_item_image(item_code):
             
             return {
                 "mimetype": mimetype,
-                "data": base64.b64encode(file_content).decode('utf-8'),
+                "data": f"data:{mimetype};base64,{base64.b64encode(file_content).decode('utf-8')}",
                 "filename": f"{item_code}.jpg"
             }
         
