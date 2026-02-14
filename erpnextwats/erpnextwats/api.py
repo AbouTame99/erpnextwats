@@ -14,6 +14,11 @@ from datetime import datetime, timedelta
 from frappe.utils.pdf import get_pdf
 from frappe.utils import get_url, now_datetime, today
 from erpnext.accounts.utils import get_balance_on
+import io
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 # ===== CORE INFRASTRUCTURE =====
 
@@ -3028,7 +3033,53 @@ def get_all_customers_with_phones():
             error=e,
             metadata={"error_type": "Dead Stock Customer Query Error"}
         )
-        return []
+
+def optimize_image_data(file_content, max_width=800, max_height=800, max_size_kb=200):
+    """
+    Optimizes image data by resizing and compressing it.
+    """
+    if not Image:
+        return file_content
+        
+    try:
+        # Check current size
+        current_size_kb = len(file_content) / 1024
+        if current_size_kb <= max_size_kb:
+            return file_content
+            
+        # Open image
+        img = Image.open(io.BytesIO(file_content))
+        
+        # Preserve transparency (convert RGBA to RGB)
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[3])
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+            
+        # Resize if too large
+        if img.width > max_width or img.height > max_height:
+            img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+            
+        # Compress and save
+        output = io.BytesIO()
+        # Start with quality 85, reduce if still too large
+        quality = 85
+        img.save(output, format='JPEG', quality=quality, optimize=True)
+        
+        while output.tell() / 1024 > max_size_kb and quality > 30:
+            quality -= 10
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=quality, optimize=True)
+            
+        return output.getvalue()
+        
+    except Exception as e:
+        frappe.logger().warning(f"Image optimization failed: {str(e)}")
+        return file_content
 
 
 def get_item_image(item_code):
@@ -3053,9 +3104,17 @@ def get_item_image(item_code):
                 import mimetypes
                 mimetype = mimetypes.guess_type(item.image)[0] or "image/jpeg"
                 
+                # Optimize image before encoding
+                original_size = len(file_content)
+                file_content = optimize_image_data(file_content)
+                optimized_size = len(file_content)
+                
+                if optimized_size < original_size:
+                    frappe.logger().info(f"[DEAD STOCK] Optimized image for {item_code}: {original_size/1024:.1f}KB -> {optimized_size/1024:.1f}KB")
+                
                 return {
                     "mimetype": mimetype,
-                    "data": f"data:{mimetype};base64,{base64.b64encode(file_content).decode('utf-8')}",
+                    "data": base64.b64encode(file_content).decode('utf-8'),
                     "filename": f"{item_code}.jpg"
                 }
         
@@ -3078,9 +3137,17 @@ def get_item_image(item_code):
             import mimetypes
             mimetype = mimetypes.guess_type(files[0].file_url)[0] or "image/jpeg"
             
+            # Optimize image before encoding
+            original_size = len(file_content)
+            file_content = optimize_image_data(file_content)
+            optimized_size = len(file_content)
+            
+            if optimized_size < original_size:
+                frappe.logger().info(f"[DEAD STOCK] Optimized image for {item_code}: {original_size/1024:.1f}KB -> {optimized_size/1024:.1f}KB")
+            
             return {
                 "mimetype": mimetype,
-                "data": f"data:{mimetype};base64,{base64.b64encode(file_content).decode('utf-8')}",
+                "data": base64.b64encode(file_content).decode('utf-8'),
                 "filename": f"{item_code}.jpg"
             }
         
@@ -3089,6 +3156,29 @@ def get_item_image(item_code):
     except Exception as e:
         frappe.logger().warning(f"[DEAD STOCK] Error getting image for {item_code}: {str(e)}")
         return None
+
+
+def split_template_message(message):
+    """
+    Splits a Jinja template message into three parts:
+    1. Greeting (text before the loop)
+    2. Item Row (content inside the {% for ... %} {% endfor %} block)
+    3. Footer (text after the loop)
+    """
+    if not message:
+        return "", "", ""
+        
+    # Match {% for ... %} contents {% endfor %}
+    loop_pattern = re.compile(r'(.*?)\{%\s*for\s+.*?\s+in\s+.*?\s*%\}(.*?)\{%\s*endfor\s*%\}(.*)', re.DOTALL)
+    match = loop_pattern.search(message)
+    
+    if match:
+        greeting = match.group(1).strip()
+        item_row = match.group(2).strip()
+        footer = match.group(3).strip()
+        return greeting, item_row, footer
+    
+    return message, "", ""
 
 
 def send_dead_stock_campaign(template):
@@ -3136,6 +3226,11 @@ def send_dead_stock_campaign(template):
     items_without_images = []
     include_images = template.include_item_images
     send_style = getattr(template, 'dead_stock_send_style', 'Each Item Separately') or 'Each Item Separately'
+    
+    # Split template for sequential mode if needed
+    greeting_tpl, item_row_tpl, footer_tpl = "", "", ""
+    if send_style == "All Items (Individual Bubbles)":
+        greeting_tpl, item_row_tpl, footer_tpl = split_template_message(template.message)
     
     # Process each customer (Cluster mode)
     for cust_idx, customer in enumerate(customers):
@@ -3227,6 +3322,78 @@ def send_dead_stock_campaign(template):
 
                 delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
                 time.sleep(delay)
+
+            except Exception as e:
+                total_failed += 1
+                log_error(activity_type="Message Failed", error=e, template=template.name, customer=customer.name)
+
+        elif send_style == "All Items (Individual Bubbles)":
+            # ===== SEQUENTIAL MODE: Greeting -> [Image + Info] x N -> Footer =====
+            try:
+                # 1. Send Greeting
+                if greeting_tpl:
+                    greeting_ctx = {
+                        "customer_name": customer.customer_name,
+                        "total_items": len(today_items),
+                        "frappe": frappe,
+                        "today": today()
+                    }
+                    greeting_rendered = frappe.render_template(greeting_tpl, greeting_ctx)
+                    send_message_direct(customer.mobile_no, greeting_rendered, template)
+                    time.sleep(random.randint(1, 2))
+
+                # 2. Loop through items
+                for idx, item_data in enumerate(today_items):
+                    item_code = item_data.item_code
+                    
+                    media = None
+                    if include_images:
+                        media = get_item_image(item_code)
+
+                    item_ctx = {
+                        "item_code": item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value,
+                        "customer_name": customer.customer_name,
+                        "frappe": frappe,
+                        "today": today(),
+                        "now": now_datetime()
+                    }
+                    
+                    # Render item bubble
+                    item_rendered = frappe.render_template(item_row_tpl or template.message, item_ctx)
+                    
+                    # Send item bubble
+                    data = {
+                        "userId": "shared_company_session",
+                        "to": customer.mobile_no,
+                        "message": item_rendered,
+                        "media": media
+                    }
+                    result = proxy_to_service("POST", "api/whatsapp/send", data)
+                    
+                    if result.get("status") == "success":
+                        total_sent += 1
+                    else:
+                        total_failed += 1
+                    
+                    # Send divider between items (except after last)
+                    if idx < len(today_items) - 1:
+                        time.sleep(1)
+                        send_message_direct(customer.mobile_no, "----------------", template)
+                    
+                    time.sleep(random.randint(2, 4))
+
+                # 3. Send Footer
+                if footer_tpl:
+                    footer_rendered = frappe.render_template(footer_tpl, {"customer_name": customer.customer_name})
+                    send_message_direct(customer.mobile_no, footer_rendered, template)
 
             except Exception as e:
                 total_failed += 1
@@ -3524,6 +3691,82 @@ def test_dead_stock_send(template_name, phone):
             except Exception as e:
                 failed += 1
                 results.append({"item": "combined", "status": "error", "error": str(e)})
+
+        elif send_style == "All Items (Individual Bubbles)":
+            # ===== SEQUENTIAL MODE TEST: Greeting -> [Image + Info] x N -> Footer =====
+            try:
+                greeting_tpl, item_row_tpl, footer_tpl = split_template_message(template.message)
+                
+                # 1. Send Greeting
+                if greeting_tpl:
+                    greeting_ctx = {
+                        "customer_name": "Test Customer",
+                        "total_items": len(today_items),
+                        "frappe": frappe,
+                        "today": today()
+                    }
+                    greeting_rendered = frappe.render_template(greeting_tpl, greeting_ctx)
+                    send_message_direct(validated_phone, greeting_rendered, template)
+                    results.append({"item": "greeting", "status": "sent"})
+                    time.sleep(1)
+
+                # 2. Loop through items
+                for idx, item_data in enumerate(today_items):
+                    item_code = item_data.item_code
+                    
+                    media = None
+                    if include_images:
+                        media = get_item_image(item_code)
+
+                    item_ctx = {
+                        "item_code": item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "row_rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value,
+                        "customer_name": "Test Customer",
+                        "frappe": frappe,
+                        "today": today(),
+                        "now": now_datetime()
+                    }
+                    
+                    item_rendered = frappe.render_template(item_row_tpl or template.message, item_ctx)
+                    
+                    data = {
+                        "userId": "shared_company_session",
+                        "to": validated_phone,
+                        "message": item_rendered,
+                        "media": media
+                    }
+                    result = proxy_to_service("POST", "api/whatsapp/send", data)
+                    
+                    if result.get("status") == "success":
+                        sent += 1
+                        results.append({"item": item_code, "status": "sent"})
+                    else:
+                        failed += 1
+                        results.append({"item": item_code, "status": "failed"})
+                    
+                    # Divider
+                    if idx < len(today_items) - 1:
+                        time.sleep(1)
+                        send_message_direct(validated_phone, "----------------", template)
+                    
+                    time.sleep(2)
+
+                # 3. Send Footer
+                if footer_tpl:
+                    footer_rendered = frappe.render_template(footer_tpl, {"customer_name": "Test Customer"})
+                    send_message_direct(validated_phone, footer_rendered, template)
+                    results.append({"item": "footer", "status": "sent"})
+
+            except Exception as e:
+                failed += 1
+                results.append({"item": "sequential", "status": "error", "error": str(e)})
 
         else:
             # ===== SEPARATE MODE: One message per item =====

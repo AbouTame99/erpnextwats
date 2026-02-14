@@ -438,6 +438,8 @@ frappe.ui.form.on('WhatsApp Template', {
             frm.add_custom_button('🧪 Test Dead Stock', () => {
                 const sendStyle = frm.doc.dead_stock_send_style || 'Each Item Separately';
                 const isCombined = sendStyle === 'All Items in One Message';
+                const isSequential = sendStyle === 'All Items (Individual Bubbles)';
+
                 const d = new frappe.ui.Dialog({
                     title: '🧪 Test Dead Stock Campaign',
                     fields: [
@@ -455,7 +457,9 @@ frappe.ui.form.on('WhatsApp Template', {
                                 '<strong>ℹ️ Send Style: ' + sendStyle + '</strong><br>' +
                                 (isCombined
                                     ? '• All items will be sent as <b>ONE combined message</b><br>'
-                                    : '• Each item sent as a <b>separate message</b> (with image if enabled)<br>') +
+                                    : isSequential
+                                        ? '• Sequential Flow: <b>Greeting → Separate Items (with images) → Footer</b><br>'
+                                        : '• Each item sent as a <b>separate message</b> (with image if enabled)<br>') +
                                 '• Does <b>NOT</b> advance the campaign index or affect daily limits<br>' +
                                 '• Customer name will show as "Test Customer"' +
                                 '</div>'
