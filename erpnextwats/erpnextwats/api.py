@@ -3129,6 +3129,7 @@ def send_dead_stock_campaign(template):
     total_failed = 0
     items_without_images = []
     include_images = template.include_item_images
+    send_style = getattr(template, 'dead_stock_send_style', 'Each Item Separately') or 'Each Item Separately'
     
     # Process each customer (Cluster mode)
     for cust_idx, customer in enumerate(customers):
@@ -3141,49 +3142,49 @@ def send_dead_stock_campaign(template):
             )
             time.sleep(cluster_delay)
 
-        # Process the batch for this customer
-        for item_data in today_items:
-            item_code = item_data.item_code
-            
-            # Quota Check: if we hit 120/hr, we must wait or abort
-            # In background jobs, we'll just sleep 2 minutes and retry check
+        if send_style == "All Items in One Message":
+            # ===== COMBINED MODE: One message with all items per customer =====
+            # Quota Check
             while not check_global_quota(is_mass_campaign=True):
                 time.sleep(120)
 
-            # Check if this item + customer combo was already sent today
-            if was_dead_stock_sent_today(item_code, customer.name, template.name):
+            # Check if already sent today (use first item as marker)
+            if was_dead_stock_sent_today(today_items[0].item_code, customer.name, template.name):
                 total_sent += 1
                 continue
 
             try:
-                # Get item image if enabled
-                media = None
-                if include_images:
-                    media = get_item_image(item_code)
-                    if not media:
-                        items_without_images.append(item_code)
+                # Build items list for Jinja template
+                items_list = []
+                for item_data in today_items:
+                    items_list.append({
+                        "item_code": item_data.item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value
+                    })
 
-                # Prepare message context with Sell Rate
                 ctx = {
-                    "item_code": item_code,
-                    "item_name": item_data.item_name,
-                    "description": item_data.description,
-                    "qty": item_data.qty,
-                    "days_stagnant": item_data.days_stagnant,
-                    "cost": item_data.cost,
-                    "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
-                    "value": item_data.value,
+                    "items": items_list,
                     "customer_name": customer.customer_name,
+                    "total_items": len(items_list),
                     "frappe": frappe,
                     "today": today(),
                     "now": now_datetime()
                 }
                 message = frappe.render_template(template.message, ctx)
-                
-                # Send with retry logic
+
+                # Send single combined message with first item's image
+                media = None
+                if include_images and today_items:
+                    media = get_item_image(today_items[0].item_code)
                 success = False
                 final_error = None
-                
+
                 for attempt in range(1, 4):
                     try:
                         data = {
@@ -3192,41 +3193,115 @@ def send_dead_stock_campaign(template):
                             "message": message,
                             "media": media
                         }
-                        
                         result = proxy_to_service("POST", "api/whatsapp/send", data)
-                        
+
                         if result.get("status") == "success":
                             success = True
                             total_sent += 1
-                            
                             log_success(
                                 activity_type="Message Sent",
                                 template=template.name,
                                 customer=customer.name,
                                 customer_phone=customer.mobile_no,
-                                reference_name=item_code,
+                                reference_name=f"combined_{len(items_list)}_items",
                                 retry_count=attempt,
-                                metadata={"send_type": "dead_stock", "price_used": ctx["Rate"]}
+                                metadata={"send_type": "dead_stock_combined", "items_count": len(items_list)}
                             )
                             break
                         else:
                             final_error = result.get("message", "Unknown error")
                             time.sleep(random.randint(5, 15))
-                    
                     except Exception as e:
                         final_error = str(e)
                         time.sleep(random.randint(5, 15))
-                
+
                 if not success:
                     total_failed += 1
-                
-                # Anti-ban delay between items in a cluster (20-45s)
+
                 delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
                 time.sleep(delay)
-                
+
             except Exception as e:
                 total_failed += 1
                 log_error(activity_type="Message Failed", error=e, template=template.name, customer=customer.name)
+
+        else:
+            # ===== SEPARATE MODE: One message per item per customer =====
+            for item_data in today_items:
+                item_code = item_data.item_code
+
+                while not check_global_quota(is_mass_campaign=True):
+                    time.sleep(120)
+
+                if was_dead_stock_sent_today(item_code, customer.name, template.name):
+                    total_sent += 1
+                    continue
+
+                try:
+                    media = None
+                    if include_images:
+                        media = get_item_image(item_code)
+                        if not media:
+                            items_without_images.append(item_code)
+
+                    ctx = {
+                        "item_code": item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value,
+                        "customer_name": customer.customer_name,
+                        "frappe": frappe,
+                        "today": today(),
+                        "now": now_datetime()
+                    }
+                    message = frappe.render_template(template.message, ctx)
+
+                    success = False
+                    final_error = None
+
+                    for attempt in range(1, 4):
+                        try:
+                            data = {
+                                "userId": "shared_company_session",
+                                "to": customer.mobile_no,
+                                "message": message,
+                                "media": media
+                            }
+                            result = proxy_to_service("POST", "api/whatsapp/send", data)
+
+                            if result.get("status") == "success":
+                                success = True
+                                total_sent += 1
+                                log_success(
+                                    activity_type="Message Sent",
+                                    template=template.name,
+                                    customer=customer.name,
+                                    customer_phone=customer.mobile_no,
+                                    reference_name=item_code,
+                                    retry_count=attempt,
+                                    metadata={"send_type": "dead_stock", "price_used": ctx["Rate"]}
+                                )
+                                break
+                            else:
+                                final_error = result.get("message", "Unknown error")
+                                time.sleep(random.randint(5, 15))
+                        except Exception as e:
+                            final_error = str(e)
+                            time.sleep(random.randint(5, 15))
+
+                    if not success:
+                        total_failed += 1
+
+                    delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
+                    time.sleep(delay)
+
+                except Exception as e:
+                    total_failed += 1
+                    log_error(activity_type="Message Failed", error=e, template=template.name, customer=customer.name)
 
         # Commit progress after each customer to ensure resumability
         frappe.db.commit()
@@ -3349,6 +3424,162 @@ def run_dead_stock_campaign_now(template_name):
             timeout=72000
         )
         return {"status": "success", "message": "Dead stock campaign started in the background (20h timeout)"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def test_dead_stock_send(template_name, phone):
+    """
+    Test Dead Stock campaign: sends today's batch of items to a SINGLE phone number.
+    Uses short delays (3-5s) since this is a manual test, not a mass campaign.
+    Does NOT advance the batch index or count toward campaign stats.
+    """
+    try:
+        template = frappe.get_doc("WhatsApp Template", template_name)
+        if template.auto_send_mode != "Dead Stock Marketing":
+            return {"status": "error", "message": "Template is not in Dead Stock Marketing mode"}
+
+        # Validate phone
+        validated_phone = validate_phone_medium(phone)
+        if not validated_phone:
+            return {"status": "error", "message": f"Invalid phone number: {phone}"}
+
+        # Get today's batch (does NOT advance index)
+        today_items, total_pool, _, _ = get_todays_dead_stock_batch(template)
+
+        if not today_items:
+            return {"status": "error", "message": "No dead stock items found matching criteria"}
+
+        include_images = template.include_item_images
+        send_style = getattr(template, 'dead_stock_send_style', 'Each Item Separately') or 'Each Item Separately'
+        sent = 0
+        failed = 0
+        results = []
+
+        if send_style == "All Items in One Message":
+            # ===== COMBINED MODE: One message with all items =====
+            try:
+                items_list = []
+                for item_data in today_items:
+                    items_list.append({
+                        "item_code": item_data.item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value
+                    })
+
+                ctx = {
+                    "items": items_list,
+                    "customer_name": "Test Customer",
+                    "total_items": len(items_list),
+                    "frappe": frappe,
+                    "today": today(),
+                    "now": now_datetime()
+                }
+                message = frappe.render_template(template.message, ctx)
+
+                # Get first item's image if enabled
+                media = None
+                if include_images and today_items:
+                    media = get_item_image(today_items[0].item_code)
+
+                data = {
+                    "userId": "shared_company_session",
+                    "to": validated_phone,
+                    "message": message,
+                    "media": media
+                }
+                result = proxy_to_service("POST", "api/whatsapp/send", data)
+
+                if result.get("status") == "success":
+                    sent += 1
+                    for item in items_list:
+                        results.append({"item": item["item_code"], "status": "sent", "rate": item["Rate"]})
+                    log_success(
+                        activity_type="Message Sent",
+                        template=template.name,
+                        customer_phone=validated_phone,
+                        reference_name=f"combined_{len(items_list)}_items",
+                        metadata={"send_type": "dead_stock_test_combined", "items_count": len(items_list)}
+                    )
+                else:
+                    failed += 1
+                    for item in items_list:
+                        results.append({"item": item["item_code"], "status": "failed", "error": result.get("message", "Unknown")})
+
+            except Exception as e:
+                failed += 1
+                results.append({"item": "combined", "status": "error", "error": str(e)})
+
+        else:
+            # ===== SEPARATE MODE: One message per item =====
+            for item_data in today_items:
+                item_code = item_data.item_code
+                try:
+                    media = None
+                    if include_images:
+                        media = get_item_image(item_code)
+
+                    ctx = {
+                        "item_code": item_code,
+                        "item_name": item_data.item_name,
+                        "description": item_data.description,
+                        "qty": item_data.qty,
+                        "days_stagnant": item_data.days_stagnant,
+                        "cost": item_data.cost,
+                        "Rate": item_data.standard_rate if hasattr(item_data, 'standard_rate') else item_data.cost,
+                        "value": item_data.value,
+                        "customer_name": "Test Customer",
+                        "frappe": frappe,
+                        "today": today(),
+                        "now": now_datetime()
+                    }
+                    message = frappe.render_template(template.message, ctx)
+
+                    data = {
+                        "userId": "shared_company_session",
+                        "to": validated_phone,
+                        "message": message,
+                        "media": media
+                    }
+
+                    result = proxy_to_service("POST", "api/whatsapp/send", data)
+
+                    if result.get("status") == "success":
+                        sent += 1
+                        results.append({"item": item_code, "status": "sent", "rate": ctx["Rate"]})
+                        log_success(
+                            activity_type="Message Sent",
+                            template=template.name,
+                            customer_phone=validated_phone,
+                            reference_name=item_code,
+                            metadata={"send_type": "dead_stock_test", "price_used": ctx["Rate"]}
+                        )
+                    else:
+                        failed += 1
+                        results.append({"item": item_code, "status": "failed", "error": result.get("message", "Unknown")})
+
+                    time.sleep(random.randint(3, 5))
+
+                except Exception as e:
+                    failed += 1
+                    results.append({"item": item_code, "status": "error", "error": str(e)})
+
+        return {
+            "status": "success",
+            "message": f"Test complete ({send_style}): {sent} sent, {failed} failed out of {len(today_items)} items",
+            "sent": sent,
+            "failed": failed,
+            "total_items": len(today_items),
+            "send_style": send_style,
+            "results": results
+        }
+
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

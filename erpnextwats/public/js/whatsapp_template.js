@@ -433,6 +433,90 @@ frappe.ui.form.on('WhatsApp Template', {
                     }
                 });
             });
+
+            // Test Dead Stock - Send today's batch to a single phone
+            frm.add_custom_button('🧪 Test Dead Stock', () => {
+                const sendStyle = frm.doc.dead_stock_send_style || 'Each Item Separately';
+                const isCombined = sendStyle === 'All Items in One Message';
+                const d = new frappe.ui.Dialog({
+                    title: '🧪 Test Dead Stock Campaign',
+                    fields: [
+                        {
+                            label: 'Phone Number',
+                            fieldname: 'phone',
+                            fieldtype: 'Data',
+                            reqd: 1,
+                            description: 'Enter a phone number to receive today\'s dead stock items'
+                        },
+                        {
+                            fieldtype: 'HTML',
+                            fieldname: 'info_html',
+                            options: '<div class="alert alert-info" style="margin-top:10px;">' +
+                                '<strong>ℹ️ Send Style: ' + sendStyle + '</strong><br>' +
+                                (isCombined
+                                    ? '• All items will be sent as <b>ONE combined message</b><br>'
+                                    : '• Each item sent as a <b>separate message</b> (with image if enabled)<br>') +
+                                '• Does <b>NOT</b> advance the campaign index or affect daily limits<br>' +
+                                '• Customer name will show as "Test Customer"' +
+                                '</div>'
+                        }
+                    ],
+                    size: 'small',
+                    primary_action_label: '📤 Send Test',
+                    primary_action: (values) => {
+                        d.hide();
+                        frappe.show_progress('Sending Test...', 0, 100, 'Preparing messages...');
+
+                        frappe.call({
+                            method: 'erpnextwats.erpnextwats.api.test_dead_stock_send',
+                            args: {
+                                template_name: frm.doc.name,
+                                phone: values.phone
+                            },
+                            callback: (r) => {
+                                frappe.hide_progress();
+                                if (r.message && r.message.status === 'success') {
+                                    // Build results table
+                                    let resultsHtml = '<table class="table table-bordered table-condensed">';
+                                    resultsHtml += '<thead><tr><th>Item</th><th>Rate</th><th>Status</th></tr></thead><tbody>';
+
+                                    (r.message.results || []).forEach(item => {
+                                        const statusBadge = item.status === 'sent'
+                                            ? '<span class="badge badge-success">✓ Sent</span>'
+                                            : '<span class="badge badge-danger">✗ Failed: ' + (item.error || '') + '</span>';
+                                        resultsHtml += '<tr><td><code>' + item.item + '</code></td><td>' +
+                                            (item.rate || '-') + '</td><td>' + statusBadge + '</td></tr>';
+                                    });
+
+                                    resultsHtml += '</tbody></table>';
+
+                                    frappe.msgprint({
+                                        title: '🧪 Test Results',
+                                        message: '<div style="margin-bottom:10px"><strong>' + r.message.message + '</strong></div>' + resultsHtml,
+                                        indicator: r.message.failed > 0 ? 'orange' : 'green',
+                                        wide: true
+                                    });
+                                } else {
+                                    frappe.msgprint({
+                                        title: 'Test Failed',
+                                        message: r.message ? r.message.message : 'Unknown error',
+                                        indicator: 'red'
+                                    });
+                                }
+                            },
+                            error: () => {
+                                frappe.hide_progress();
+                                frappe.msgprint({
+                                    title: 'Error',
+                                    message: 'Failed to run test. Check console for details.',
+                                    indicator: 'red'
+                                });
+                            }
+                        });
+                    }
+                });
+                d.show();
+            });
         }
 
         // Show/hide visual builder based on auto_send_mode

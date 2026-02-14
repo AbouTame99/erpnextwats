@@ -38,6 +38,7 @@
         "column_break_ds1",
         "send_time",
         "include_item_images",
+        "dead_stock_send_style",
         "dead_stock_preview_section",
         "preview_dead_stock_btn",
         "dead_stock_preview_html",
@@ -238,7 +239,16 @@
             "fieldtype": "Check",
             "label": "Include Item Images",
             "default": "1",
-            "description": "Attach product images if available",
+            "description": "Attach product images if available (only works with 'Each Item Separately')",
+            "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
+        },
+        {
+            "fieldname": "dead_stock_send_style",
+            "fieldtype": "Select",
+            "label": "Send Style",
+            "options": "Each Item Separately\nAll Items in One Message",
+            "default": "Each Item Separately",
+            "description": "'Each Item Separately' = one message per item (with image). 'All Items in One Message' = single combined message listing all items.",
             "depends_on": "eval:doc.enable_auto_send && doc.auto_send_mode == 'Dead Stock Marketing'"
         },
         {
