@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "frappe~=16.0.0" # Installed and managed by bench.
+#     # "frappe~=16.0.0" # Installed and managed by bench.
     # Note: WhatsApp gateway uses Node.js (whatsapp-web.js) instead of Python
     # Install Node.js dependencies with: npm install (in apps/erpnextwats directory)
 ]
