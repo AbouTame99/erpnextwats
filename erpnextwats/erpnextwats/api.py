@@ -29,10 +29,13 @@ def proxy_to_service(method, endpoint=None, data=None, **kwargs):
     path = endpoint or kwargs.get('path')
     if not path:
         frappe.throw("Missing endpoint/path parameter")
-        
+    
     url = f"http://localhost:3000/{path.lstrip('/')}"
     try:
         if method.upper() == "POST":
+            # Ensure data is a dict for JSON POST; if None, use empty dict
+            if data is None:
+                data = {}
             response = requests.post(url, json=data, timeout=60)
         else:
             response = requests.get(url, timeout=30)
