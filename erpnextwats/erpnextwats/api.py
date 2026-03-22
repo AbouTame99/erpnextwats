@@ -45,7 +45,7 @@ def proxy_to_service(method, endpoint=None, data=None, **kwargs):
 
 def get_rendering_context(doc):
     """Provides context for Jinja templates."""
-    from frappe.utils import format_date, format_datetime, flt
+    from frappe.utils import format_date, format_datetime, flt, get_url_to_form
     
     # format_currency might move between versions, use a resilient import
     try:
@@ -58,6 +58,7 @@ def get_rendering_context(doc):
             def format_currency(amount, currency=None, precision=None):
                 return frappe.format(amount, "Currency", {"currency": currency})
     
+    # Initialize context with basic values
     ctx = {
         "doc": doc,
         "frappe": frappe,
@@ -66,13 +67,56 @@ def get_rendering_context(doc):
         "format_currency": format_currency,
         "flt": flt,
         "today": frappe.utils.today(),
-        "now": frappe.utils.now()
+        "now": frappe.utils.now(),
     }
+    
+    # Add computed link values for direct template usage
+    if hasattr(doc, 'customer') and doc.customer:
+        ctx["customer_link"] = get_url_to_form("Customer", doc.customer)
+    else:
+        ctx["customer_link"] = None
+        
+    if hasattr(doc, 'supplier') and doc.supplier:
+        ctx["supplier_link"] = get_url_to_form("Supplier", doc.supplier)
+    else:
+        ctx["supplier_link"] = None
+        
+    if hasattr(doc, 'employee') and doc.employee:
+        ctx["employee_link"] = get_url_to_form("Employee", doc.employee)
+    else:
+        ctx["employee_link"] = None
+        
+    if hasattr(doc, 'user') and doc.user:
+        ctx["user_link"] = get_url_to_form("User", doc.user)
+    else:
+        ctx["user_link"] = None
+    
+    # Add helper functions for generating links (for backward compatibility)
+    ctx.update({
+        "get_url_to_form": get_url_to_form,
+        "get_customer_link": lambda: get_url_to_form("Customer", doc.customer) if hasattr(doc, 'customer') and doc.customer else None,
+        "get_supplier_link": lambda: get_url_to_form("Supplier", doc.supplier) if hasattr(doc, 'supplier') and doc.supplier else None,
+        "get_employee_link": lambda: get_url_to_form("Employee", doc.employee) if hasattr(doc, 'employee') and doc.employee else None,
+        "get_user_link": lambda: get_url_to_form("User", doc.user) if hasattr(doc, 'user') and doc.user else None,
+    })
     
     # Add Item-specific aliases for better template experience
     if doc.doctype == "Item":
         ctx["Rate"] = getattr(doc, "valuation_rate", 0) or getattr(doc, "standard_rate", 0)
         
+    # Add common document fields that templates might need
+    # These are safe to add as they just mirror existing doc attributes
+    common_fields = [
+        'name', 'title', 'customer_name', 'supplier_name', 'customer', 'supplier',
+        'employee', 'user', 'grand_total', 'net_total', 'total_qty', 'outstanding_amount',
+        'item_code', 'item_name', 'description', 'qty', 'rate', 'amount', 'valuation_rate',
+        'standard_rate', 'cost', 'value', 'days_stagnant'
+    ]
+    
+    for field in common_fields:
+        if hasattr(doc, field):
+            ctx[field] = getattr(doc, field)
+    
     return ctx
 
 # Adaptive delay to prevent WhatsApp account ban.
