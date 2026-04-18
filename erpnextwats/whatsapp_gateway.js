@@ -60,6 +60,16 @@ app.use((req, res, next) => {
     next();
 });
 
+// Request logging middleware
+app.use((req, res, next) => {
+    logEvent('API', 'Incoming Request', {
+        method: req.method,
+        url: req.url,
+        ip: req.ip
+    });
+    next();
+});
+
 // Increased limits for media attachments
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ limit: '60mb', extended: true }));
@@ -295,12 +305,18 @@ function getSharedSession() {
 
 // Initialize session
 app.post('/api/whatsapp/init', async (req, res) => {
-    const session = getSharedSession();
-    res.json({ 
-        status: session.status, 
-        message: 'Using shared company session',
-        info: session.getSessionInfo()
-    });
+    logEvent('API', 'Init Request', { timestamp: new Date().toISOString() });
+    try {
+        const session = getSharedSession();
+        res.json({ 
+            status: session.status, 
+            message: 'Using shared company session',
+            info: session.getSessionInfo()
+        });
+    } catch (error) {
+        logError('API', error, { endpoint: '/api/whatsapp/init' });
+        res.status(500).json({ status: 'error', message: error.message });
+    }
 });
 
 // Get status (no userId needed)
