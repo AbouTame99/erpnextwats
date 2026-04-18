@@ -97,10 +97,10 @@ class WhatsAppSession {
                 clientId: this.sessionId,
                 dataPath: BASE_AUTH_DIR
             }),
-            /* 
-               REMOVED outdated hardcoded webVersionCache. 
-               The library will now auto-fetch the latest compatible version.
-            */
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+            },
             puppeteer: {
                 headless: true,
                 args: [
@@ -110,7 +110,9 @@ class WhatsAppSession {
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
                     '--no-zygote',
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--disable-extensions',
+                    '--disable-web-security'
                 ]
             },
             qrMaxRetries: 5,
