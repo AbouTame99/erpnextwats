@@ -13,7 +13,9 @@ const SHARED_SESSION_ID = 'shared_company_session';
 const LOG_DIR = '/cloudclusters/erpnext/frappe-bench/logs/whatsapp_gateway';
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
-const LOG_FILE = path.join(LOG_DIR, `gateway_${new Date().toISOString().split('T')[0]}.log`);
+function getLogFile() {
+    return path.join(LOG_DIR, `gateway_${new Date().toISOString().split('T')[0]}.log`);
+}
 
 function logEvent(type, status, details = {}) {
     const timestamp = new Date().toISOString();
@@ -26,7 +28,7 @@ function logEvent(type, status, details = {}) {
     
     // Write to log file
     try {
-        fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + '\n');
+        fs.appendFileSync(getLogFile(), JSON.stringify(logEntry) + '\n');
     } catch (e) {
         console.error(`[LOG ERROR] Failed to write log: ${e.message}`);
     }
@@ -95,10 +97,10 @@ class WhatsAppSession {
                 clientId: this.sessionId,
                 dataPath: BASE_AUTH_DIR
             }),
-            webVersionCache: {
-                type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1012170943-alpha.html'
-            },
+            /* 
+               REMOVED outdated hardcoded webVersionCache. 
+               The library will now auto-fetch the latest compatible version.
+            */
             puppeteer: {
                 headless: true,
                 args: [

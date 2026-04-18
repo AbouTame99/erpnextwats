@@ -16,7 +16,10 @@ fi
 # Install system dependencies for Puppeteer (Chrome)
 echo "Installing system dependencies..."
 if [ -f /etc/debian_version ]; then
-    apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libpangocairo-1.0-0
+    # Added libnspr4 and libxss1 which were missing
+    # Added t64 variants for newer Ubuntu images
+    apt-get update
+    apt-get install -y libnspr4 libnss3 libatk1.0-0* libatk-bridge2.0-0* libcups2* libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2* libpango-1.0-0 libpangocairo-1.0-0 libxss1
 fi
 
 # Ensure Chrome is installed for Puppeteer

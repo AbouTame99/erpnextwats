@@ -7,7 +7,7 @@
     "start": "node erpnextwats/whatsapp_gateway.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.23.0",
+    "whatsapp-web.js": "latest",
     "qrcode": "^1.5.3",
     "express": "^4.18.2"
   },
