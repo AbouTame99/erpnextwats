@@ -442,16 +442,75 @@ def validate_phone_medium(phone):
     """Validates and formats a phone number."""
     if not phone:
         return None
-        cleaned = '+' + cleaned.lstrip('0')
     
-    # Remove leading 0 after country code (e.g., +212 0612 -> +212612)
-    cleaned = re.sub(r'^(\+\d{1,3})0', r'\1', cleaned)
+    # Remove non-numeric characters
+    clean_phone = ''.join(filter(str.isdigit, str(phone)))
     
-    # Validate format: + followed by 10-15 digits
-    if not re.match(r'^\+\d{10,15}$', cleaned):
+    if not clean_phone:
         return None
+        
+    # Ensure it starts with a country code (very basic check)
+    if len(clean_phone) < 10:
+        return None
+        
+    return clean_phone
+
+def get_recipient_phone(doc):
+    """
+    Robustly find a phone number for a document.
+    Checks direct fields, linked customer/supplier/lead, and contact persons.
+    """
+    if not doc:
+        return None
+        
+    # 1. Try direct fields on the document
+    phone = (getattr(doc, "mobile_no", None) or 
+            getattr(doc, "phone", None) or 
+            getattr(doc, "contact_mobile", None) or
+            getattr(doc, "customer_mobile", None))
     
-    return cleaned
+    if phone:
+        return phone
+        
+    # 2. Check for contact_person (Link to Contact)
+    contact_person = getattr(doc, "contact_person", None)
+    if contact_person:
+        try:
+            # Look for mobile_no or phone in Contact
+            res = frappe.db.get_value("Contact", contact_person, ["mobile_no", "phone"], as_dict=True)
+            if res:
+                p = res.mobile_no or res.phone
+                if p: return p
+        except:
+            pass
+            
+    # 3. Check for party_type and party (Common in Payment Entry, Journal Entry)
+    party_type = getattr(doc, "party_type", None)
+    party = getattr(doc, "party", None)
+    if party_type and party:
+        try:
+            # Common party types have mobile_no or phone
+            res = frappe.db.get_value(party_type, party, ["mobile_no", "phone"], as_dict=True)
+            if res:
+                p = res.mobile_no or res.phone
+                if p: return p
+        except:
+            pass
+            
+    # 4. Check for linked entities (Customer, Supplier, Lead)
+    for fieldname in ["customer", "supplier", "lead"]:
+        val = getattr(doc, fieldname, None)
+        if val:
+            doctype = fieldname.capitalize()
+            try:
+                res = frappe.db.get_value(doctype, val, ["mobile_no", "phone"], as_dict=True)
+                if res:
+                    p = res.mobile_no or res.phone
+                    if p: return p
+            except:
+                pass
+                
+    return None
 
 def _log_wrapper(log_status, *args, **kwargs):
     # args[0] can be activity_type, args[1] can be message
