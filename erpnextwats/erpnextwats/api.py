@@ -439,16 +439,9 @@ def is_campaign_type_allowed_today(mode):
     return True # Transactional/Recurring always allowed or handled elsewhere
 
 def validate_phone_medium(phone):
-    """Simple phone validation for bulk sending."""
+    """Validates and formats a phone number."""
     if not phone:
         return None
-        
-    # Remove all non-numeric except + at start
-    cleaned = re.sub(r'[\s\-\(\)\.]','', str(phone))
-    
-    # Ensure starts with +
-    if not cleaned.startswith('+'):
-        # If it starts with 0, assume it's a local number without country code
         cleaned = '+' + cleaned.lstrip('0')
     
     # Remove leading 0 after country code (e.g., +212 0612 -> +212612)
@@ -577,16 +570,7 @@ def send_via_template(docname, doctype, template_id, phone=None):
 
     recipient = phone
     if not recipient:
-        recipient = (getattr(doc, "mobile_no", None) or 
-                    getattr(doc, "phone", None) or 
-                    getattr(doc, "contact_mobile", None))
-        
-        if not recipient and getattr(doc, "customer", None):
-            try:
-                cust = frappe.get_doc("Customer", doc.customer)
-                recipient = cust.mobile_no or cust.phone
-            except:
-                pass
+        recipient = get_recipient_phone(doc)
 
     if not recipient:
         return {"status": "missing_phone", "message": "No phone number found. Please add a phone number to the customer or document."}
@@ -1093,16 +1077,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
             customer_result["customer_name"] = getattr(doc, "customer_name", None) or doc_name
             
             # Get phone number
-            phone = (getattr(doc, "mobile_no", None) or 
-                    getattr(doc, "phone", None) or 
-                    getattr(doc, "contact_mobile", None))
-            
-            if not phone and getattr(doc, "customer", None):
-                try:
-                    cust = frappe.get_doc("Customer", doc.customer)
-                    phone = cust.mobile_no or cust.phone
-                except:
-                    pass
+            phone = get_recipient_phone(doc)
             
             # Validate phone
             validated_phone = validate_phone_medium(phone)
@@ -1393,16 +1368,7 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
             customer_result["customer_name"] = getattr(doc, "customer_name", None) or doc_name
             
             # Get phone number
-            phone = (getattr(doc, "mobile_no", None) or 
-                    getattr(doc, "phone", None) or 
-                    getattr(doc, "contact_mobile", None))
-            
-            if not phone and getattr(doc, "customer", None):
-                try:
-                    cust = frappe.get_doc("Customer", doc.customer)
-                    phone = cust.mobile_no or cust.phone
-                except:
-                    pass
+            phone = get_recipient_phone(doc)
             
             # Validate phone
             validated_phone = validate_phone_medium(phone)
