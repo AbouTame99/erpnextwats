@@ -449,3 +449,27 @@ app.listen(port, '0.0.0.0', () => {
     console.log(`Using SHARED SESSION mode - all users share one WhatsApp connection`);
     boot();
 });
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    logError('System', err, {
+        method: req.method,
+        url: req.url,
+        ip: req.ip,
+        body: req.body
+    });
+    
+    // Handle specific Express errors
+    if (err.status === 400 && 'body' in err) {
+        return res.status(400).json({ 
+            status: 'error', 
+            message: 'Invalid JSON payload. Check your request formatting.',
+            details: err.message
+        });
+    }
+    
+    res.status(err.status || 500).json({
+        status: 'error',
+        message: err.message || 'Internal Server Error'
+    });
+});

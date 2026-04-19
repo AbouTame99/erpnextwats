@@ -33,9 +33,17 @@ def proxy_to_service(method, endpoint=None, data=None, **kwargs):
     url = f"http://localhost:3000/{path.lstrip('/')}"
     try:
         if method.upper() == "POST":
-            # Ensure data is a dict for JSON POST; if None, use empty dict
+            # Ensure data is a dict for JSON POST
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (ValueError, TypeError):
+                    # If it's not valid JSON, keep as is (could be empty or form-data)
+                    pass
+            
             if data is None:
                 data = {}
+                
             response = requests.post(url, json=data, timeout=60)
         else:
             response = requests.get(url, timeout=30)
