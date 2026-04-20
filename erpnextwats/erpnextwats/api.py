@@ -464,46 +464,48 @@ def get_recipient_phone(doc):
     if not doc:
         return None
     
-    # List of all possible phone field names to check
-    PHONE_FIELDS = ["mobile_no", "phone", "contact_mobile", "customer_mobile", 
-                    "whatsapp", "whatsapp_no", "cell_phone", "mobile"]
-    
-    def _extract_phone(record):
-        """Try to extract a phone from a dict/record trying all field names."""
-        if not record:
+    def _safe_get_phone(doctype, name):
+        """Safely get phone from any doctype by only querying fields that exist."""
+        if not name:
             return None
-        for f in PHONE_FIELDS:
-            val = record.get(f) if isinstance(record, dict) else getattr(record, f, None)
-            if val and str(val).strip():
-                return str(val).strip()
+        try:
+            # Get actual fields that exist on this doctype
+            valid_fields = frappe.get_meta(doctype).get_fieldnames_with_value()
+            phone_candidates = ["mobile_no", "phone", "contact_mobile", "customer_mobile", 
+                              "whatsapp", "whatsapp_no", "cell_phone", "mobile"]
+            # Only query fields that actually exist on this doctype
+            fields_to_check = [f for f in phone_candidates if f in valid_fields]
+            if not fields_to_check:
+                return None
+            result = frappe.db.get_value(doctype, name, fields_to_check, as_dict=True)
+            if result:
+                for f in fields_to_check:
+                    val = result.get(f)
+                    if val and str(val).strip():
+                        return str(val).strip()
+        except Exception:
+            pass
         return None
-        
+    
     # 1. Try direct fields on the document itself
-    phone = _extract_phone(doc)
-    if phone:
-        return phone
+    for f in ["mobile_no", "phone", "contact_mobile", "customer_mobile", "whatsapp", "mobile"]:
+        val = getattr(doc, f, None)
+        if val and str(val).strip():
+            return str(val).strip()
         
-    # 2. Check contact_person (Link to Contact) — common in invoices
+    # 2. Check contact_person (Link to Contact) — Payment Entry has this!
     contact_person = getattr(doc, "contact_person", None) or getattr(doc, "contact_name", None)
     if contact_person:
-        try:
-            contact_doc = frappe.db.get_value("Contact", contact_person, PHONE_FIELDS, as_dict=True)
-            phone = _extract_phone(contact_doc)
-            if phone: return phone
-        except:
-            pass
+        phone = _safe_get_phone("Contact", contact_person)
+        if phone: return phone
             
     # 3. Check party_type + party (Payment Entry, Journal Entry)
     party_type = getattr(doc, "party_type", None)
     party = getattr(doc, "party", None)
     if party_type and party:
-        # 3a. Try to get phone directly from the party (Customer/Supplier/Employee)
-        try:
-            party_doc = frappe.db.get_value(party_type, party, PHONE_FIELDS, as_dict=True)
-            phone = _extract_phone(party_doc)
-            if phone: return phone
-        except:
-            pass
+        # 3a. Try to get phone directly from the party record
+        phone = _safe_get_phone(party_type, party)
+        if phone: return phone
         
         # 3b. Find Contact linked to this party via Dynamic Link
         try:
@@ -513,10 +515,9 @@ def get_recipient_phone(doc):
                 "parenttype": "Contact"
             }, "parent")
             if contact_name:
-                contact_doc = frappe.db.get_value("Contact", contact_name, PHONE_FIELDS, as_dict=True)
-                phone = _extract_phone(contact_doc)
+                phone = _safe_get_phone("Contact", contact_name)
                 if phone: return phone
-        except:
+        except Exception:
             pass
             
     # 4. Check for linked entities (Customer, Supplier, Lead) as direct fields
@@ -524,12 +525,8 @@ def get_recipient_phone(doc):
         val = getattr(doc, fieldname, None)
         if val:
             doctype = fieldname.capitalize()
-            try:
-                entity_doc = frappe.db.get_value(doctype, val, PHONE_FIELDS, as_dict=True)
-                phone = _extract_phone(entity_doc)
-                if phone: return phone
-            except:
-                pass
+            phone = _safe_get_phone(doctype, val)
+            if phone: return phone
             
             # Also try finding Contact linked to this entity
             try:
@@ -539,10 +536,9 @@ def get_recipient_phone(doc):
                     "parenttype": "Contact"
                 }, "parent")
                 if contact_name:
-                    contact_doc = frappe.db.get_value("Contact", contact_name, PHONE_FIELDS, as_dict=True)
-                    phone = _extract_phone(contact_doc)
+                    phone = _safe_get_phone("Contact", contact_name)
                     if phone: return phone
-            except:
+            except Exception:
                 pass
                 
     return None
