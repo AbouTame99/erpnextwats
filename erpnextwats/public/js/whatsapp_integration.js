@@ -39,23 +39,45 @@ erpnextwats.add_whatsapp_button = function(frm) {
 };
 
 erpnextwats.show_template_selector = function(frm, templates) {
+    let dialog_fields = [
+        {
+            label: __('Select Template'),
+            fieldname: 'template',
+            fieldtype: 'Select',
+            options: templates.map(t => ({ label: t.template_name, value: t.name })),
+            reqd: 1,
+            default: templates.length === 1 ? templates[0].name : null
+        }
+    ];
+
+    if (frm.doctype === 'Payment Entry') {
+        dialog_fields.push({
+            label: __('Select Contact'),
+            fieldname: 'manual_contact',
+            fieldtype: 'Link',
+            options: 'Contact',
+            description: __('Select the Contact for this customer. It will be saved to this Payment Entry.'),
+            // Optional: Filter contacts by the Payment Entry's party
+            get_query: function() {
+                if (frm.doc.party_type && frm.doc.party) {
+                    return {
+                        query: "erpnext.setup.doctype.contact.contact.contact_query",
+                        filters: { link_doctype: frm.doc.party_type, link_name: frm.doc.party }
+                    };
+                }
+            }
+        });
+    }
+
+    dialog_fields.push({
+        label: __('Preview'),
+        fieldname: 'preview_html',
+        fieldtype: 'HTML'
+    });
+
     const dialog = new frappe.ui.Dialog({
         title: __('Select WhatsApp Template'),
-        fields: [
-            {
-                label: __('Select Template'),
-                fieldname: 'template',
-                fieldtype: 'Select',
-                options: templates.map(t => ({ label: t.template_name, value: t.name })),
-                reqd: 1,
-                default: templates.length === 1 ? templates[0].name : null
-            },
-            {
-                label: __('Preview'),
-                fieldname: 'preview_html',
-                fieldtype: 'HTML'
-            }
-        ],
+        fields: dialog_fields,
         primary_action_label: __('🚀 Send via WhatsApp'),
         primary_action: function(values) {
             const btn = dialog.get_primary_btn();
@@ -66,7 +88,8 @@ erpnextwats.show_template_selector = function(frm, templates) {
                 args: {
                     docname: frm.doc.name,
                     doctype: frm.doctype,
-                    template_id: values.template
+                    template_id: values.template,
+                    manual_contact: values.manual_contact
                 },
                 callback: function(r) {
                     dialog.hide();

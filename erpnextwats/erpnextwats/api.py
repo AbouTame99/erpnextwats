@@ -700,20 +700,54 @@ def get_templates(doctype):
     return [{"name": t.name, "template_name": t.template_name, "message": t.message} for t in templates]
 
 @frappe.whitelist()
-def send_via_template(docname, doctype, template_id, phone=None):
+def send_via_template(docname, doctype, template_id, phone=None, manual_contact=None):
     """Sends a message using a specific template."""
     doc = frappe.get_doc(doctype, docname)
     template = frappe.get_doc("WhatsApp Template", template_id)
 
     recipient = phone
+    
+    # If a manual contact was selected from the dialog
+    if not recipient and manual_contact:
+        # Try to get the phone number from this specific contact
+        try:
+            # We can use the helper function already defined in api.py, or just query directly
+            # To be safe and simple, let's just query the standard fields directly here
+            meta = frappe.get_meta("Contact")
+            valid_fields = meta.get_fieldnames_with_value()
+            candidates = ["mobile_no", "phone", "whatsapp_no", "whatsapp", "mobile"]
+            fields = [f for f in candidates if f in valid_fields]
+            if fields:
+                res = frappe.db.get_value("Contact", manual_contact, fields, as_dict=True)
+                if res:
+                    for f in fields:
+                        if res.get(f) and str(res.get(f)).strip():
+                            recipient = str(res.get(f)).strip()
+                            break
+                            
+            # Check child table if standard fields fail
+            if not recipient and meta.has_field("phone_nos"):
+                phones = frappe.get_all("Contact Phone", 
+                    filters={"parent": manual_contact, "parenttype": "Contact"},
+                    fields=["phone"], ignore_permissions=True
+                )
+                for p in phones:
+                    if p.phone and str(p.phone).strip():
+                        recipient = str(p.phone).strip()
+                        break
+                        
+            # If we successfully found a number, SAVE the contact to the document forever
+            if recipient and hasattr(doc, "contact_person"):
+                doc.db_set("contact_person", manual_contact)
+                
+        except Exception:
+            pass
+
     if not recipient:
         recipient = get_recipient_phone(doc)
 
     if not recipient:
-        party = getattr(doc, 'party', getattr(doc, 'customer', getattr(doc, 'supplier', 'NONE')))
-        contact = getattr(doc, 'contact_person', getattr(doc, 'contact_name', 'NONE'))
-        debug_msg = f"DEBUG: Backend sees Party='{party}' and Contact='{contact}'."
-        return {"status": "missing_phone", "message": f"No phone number found. {debug_msg} Please check the linked Contact record."}
+        return {"status": "missing_phone", "message": "No phone number found. Please select a valid Contact with a phone number, or check the document."}
 
     ctx = get_rendering_context(doc)
     message = frappe.render_template(template.message, ctx)
