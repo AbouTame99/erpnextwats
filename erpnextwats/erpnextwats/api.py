@@ -457,27 +457,32 @@ def validate_phone_medium(phone):
 
 def get_recipient_phone(doc):
     """
-    Robustly find a phone number for a document with detailed tracing.
+    Robustly find a phone number for a document.
     """
     if not doc:
         return None
     
-    lookup_trace = [f"Starting phone lookup for {doc.doctype} {doc.name}"]
-    
-    def _safe_get_phone(doctype, name, trace_prefix=""):
-        """Safely get phone from any doctype by only querying fields that exist."""
+    def _is_raw_phone(text):
+        if not text or not isinstance(text, str): return False
+        digits = ''.join(filter(str.isdigit, text))
+        # If it has at least 8 digits and most characters are numbers/spaces/plus
+        return len(digits) >= 8
+        
+    def _extract_digits(text):
+        if not text: return None
+        return ''.join(filter(lambda x: x.isdigit() or x == '+', str(text)))
+
+    def _safe_get_phone(doctype, name):
+        """Safely get phone from any doctype."""
         if not name:
-            lookup_trace.append(f"{trace_prefix} No name provided for {doctype}")
             return None
+            
         try:
             meta = frappe.get_meta(doctype)
-            # 1. Check standard fields
             valid_fields = meta.get_fieldnames_with_value()
             phone_candidates = ["mobile_no", "phone", "contact_mobile", "customer_mobile", 
                               "whatsapp", "whatsapp_no", "cell_phone", "mobile"]
             fields_to_check = [f for f in phone_candidates if f in valid_fields]
-            
-            lookup_trace.append(f"{trace_prefix} Checking {doctype} '{name}' fields: {fields_to_check}")
             
             if fields_to_check:
                 result = frappe.db.get_value(doctype, name, fields_to_check, as_dict=True)
@@ -485,57 +490,47 @@ def get_recipient_phone(doc):
                     for f in fields_to_check:
                         val = result.get(f)
                         if val and str(val).strip():
-                            num = str(val).strip()
-                            lookup_trace.append(f"{trace_prefix} FOUND '{num}' in field '{f}'")
-                            return num
+                            return str(val).strip()
             
-            # 2. Check child tables (common in newer Contact doctype)
+            # Check child tables
             if doctype == "Contact" and meta.has_field("phone_nos"):
-                lookup_trace.append(f"{trace_prefix} Checking Contact child table 'phone_nos'")
                 phones = frappe.get_all("Contact Phone", 
                     filters={"parent": name, "parenttype": "Contact"},
                     fields=["phone", "is_primary_mobile", "is_primary_phone"],
-                    order_by="is_primary_mobile desc, is_primary_phone desc"
+                    order_by="is_primary_mobile desc, is_primary_phone desc",
+                    ignore_permissions=True
                 )
-                lookup_trace.append(f"{trace_prefix} Child table rows found: {len(phones)}")
                 for p in phones:
                     if p.phone and str(p.phone).strip():
-                        num = str(p.phone).strip()
-                        lookup_trace.append(f"{trace_prefix} FOUND '{num}' in child table (Primary Mobile: {p.is_primary_mobile})")
-                        return num
-        except Exception as e:
-            lookup_trace.append(f"{trace_prefix} ERROR checking {doctype}: {str(e)}")
-        
-        lookup_trace.append(f"{trace_prefix} No phone found in {doctype} '{name}'")
+                        return str(p.phone).strip()
+        except Exception:
+            pass
         return None
     
     # 1. Try direct fields on the document itself
-    lookup_trace.append("Step 1: Checking direct fields on current document")
     for f in ["mobile_no", "phone", "contact_mobile", "customer_mobile", "whatsapp", "mobile"]:
         val = getattr(doc, f, None)
         if val and str(val).strip():
-            num = str(val).strip()
-            lookup_trace.append(f"Step 1 FOUND: '{num}' in document field '{f}'")
-            return num
+            return str(val).strip()
         
-    # 2. Check contact_person (Link to Contact) — common in Payment Entry
+    # 2. Check contact_person field directly
     contact_person = getattr(doc, "contact_person", None) or getattr(doc, "contact_name", None)
-    lookup_trace.append(f"Step 2: Checking contact_person field: '{contact_person}'")
     if contact_person:
-        phone = _safe_get_phone("Contact", contact_person, "  [Step 2]")
+        # User might have typed the phone number directly into this field
+        if _is_raw_phone(contact_person):
+            return _extract_digits(contact_person)
+            
+        # Otherwise, treat it as a Contact link
+        phone = _safe_get_phone("Contact", contact_person)
         if phone: return phone
             
     # 3. Check party_type + party (Payment Entry, Journal Entry)
     party_type = getattr(doc, "party_type", None)
     party = getattr(doc, "party", None)
-    lookup_trace.append(f"Step 3: Checking party link: {party_type} '{party}'")
     if party_type and party:
-        # 3a. Try party record directly
-        phone = _safe_get_phone(party_type, party, "  [Step 3a]")
+        phone = _safe_get_phone(party_type, party)
         if phone: return phone
         
-        # 3b. Find Contact linked to this party via Dynamic Link
-        lookup_trace.append(f"  [Step 3b] Looking for Dynamic Link from {party_type} to Contact")
         try:
             contact_name = frappe.db.get_value("Dynamic Link", {
                 "link_doctype": party_type,
@@ -543,25 +538,19 @@ def get_recipient_phone(doc):
                 "parenttype": "Contact"
             }, "parent")
             if contact_name:
-                lookup_trace.append(f"  [Step 3b] Found linked Contact: '{contact_name}'")
-                phone = _safe_get_phone("Contact", contact_name, "  [Step 3b]")
+                phone = _safe_get_phone("Contact", contact_name)
                 if phone: return phone
-            else:
-                lookup_trace.append(f"  [Step 3b] No Dynamic Link found for this party")
-        except Exception as e:
-            lookup_trace.append(f"  [Step 3b] Error in Dynamic Link lookup: {str(e)}")
+        except Exception:
+            pass
             
     # 4. Check for linked entities (Customer, Supplier, Lead)
-    lookup_trace.append("Step 4: Checking other entity fields (customer, supplier, lead)")
     for fieldname in ["customer", "supplier", "lead"]:
         val = getattr(doc, fieldname, None)
         if val:
             doctype = fieldname.capitalize()
-            lookup_trace.append(f"  [Step 4] Checking {fieldname} field: '{val}'")
-            phone = _safe_get_phone(doctype, val, f"  [Step 4-{fieldname}]")
+            phone = _safe_get_phone(doctype, val)
             if phone: return phone
             
-            # Also try finding Contact linked to this entity
             try:
                 contact_name = frappe.db.get_value("Dynamic Link", {
                     "link_doctype": doctype,
@@ -569,18 +558,11 @@ def get_recipient_phone(doc):
                     "parenttype": "Contact"
                 }, "parent")
                 if contact_name:
-                    lookup_trace.append(f"  [Step 4] Found dynamic linked Contact for {fieldname}: '{contact_name}'")
-                    phone = _safe_get_phone("Contact", contact_name, f"  [Step 4-{fieldname}-Contact]")
+                    phone = _safe_get_phone("Contact", contact_name)
                     if phone: return phone
             except Exception:
                 pass
                 
-    # Final Fallback: Log failure trace
-    final_log = "\n".join(lookup_trace)
-    try:
-        frappe.log_error(title=f"WhatsApp Phone Lookup Trace: {doc.name}", message=final_log)
-    except Exception:
-        pass
     return None
 
 def _log_wrapper(log_status, *args, **kwargs):
