@@ -232,8 +232,29 @@ class WhatsAppSession {
         let hasMedia = mediaData && mediaData.data;
 
         try {
-            // Resolve the official WhatsApp ID to prevent "No LID" errors
+            // Step 1: Check if the number is registered on WhatsApp
+            let isRegistered = false;
             let finalId = chatId;
+            try {
+                isRegistered = await this.client.isRegisteredUser(chatId);
+            } catch (regErr) {
+                console.warn(`[SHARED SESSION] Registration check failed for ${chatId}: ${regErr.message}`);
+                // Assume registered and try anyway
+                isRegistered = true;
+            }
+
+            if (!isRegistered) {
+                const errMsg = `Number ${chatId} is NOT registered on WhatsApp. Message cannot be delivered.`;
+                console.warn(`[SHARED SESSION] ${errMsg}`);
+                logEvent('Message', 'Not Registered', {
+                    sessionId: this.sessionId,
+                    to: chatId,
+                    hasMedia: !!hasMedia
+                });
+                throw new Error(errMsg);
+            }
+
+            // Step 2: Resolve the official WhatsApp ID to prevent "No LID" errors
             try {
                 const resolvedId = await this.client.getNumberId(chatId);
                 if (resolvedId) {
@@ -241,9 +262,10 @@ class WhatsAppSession {
                     console.log(`[SHARED SESSION] Resolved ${chatId} to ${finalId}`);
                 }
             } catch (resolveErr) {
-                console.warn(`[SHARED SESSION] ID resolution failed for ${chatId}, attempting with original.`);
+                console.warn(`[SHARED SESSION] ID resolution failed for ${chatId}, using original.`);
             }
 
+            // Step 3: Send the message
             if (hasMedia) {
                 const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
                 result = await this.client.sendMessage(finalId, media, { caption: message });
@@ -260,7 +282,7 @@ class WhatsAppSession {
             logEvent('Message', 'Sent', {
                 sessionId: this.sessionId,
                 to: chatId,
-                hasMedia: hasMedia,
+                hasMedia: !!hasMedia,
                 durationMs: duration,
                 messageCount: messageCount,
                 messageId: result ? result.id._serialized : null
@@ -272,9 +294,9 @@ class WhatsAppSession {
             logError('Message', error, {
                 sessionId: this.sessionId,
                 to: chatId,
-                hasMedia: hasMedia,
+                hasMedia: !!hasMedia,
                 durationMs: duration,
-                messagePreview: message.substring(0, 50) + '...'
+                messagePreview: message ? message.substring(0, 50) + '...' : ''
             });
             throw error;
         }

@@ -458,55 +458,90 @@ def validate_phone_medium(phone):
 def get_recipient_phone(doc):
     """
     Robustly find a phone number for a document.
-    Checks direct fields, linked customer/supplier/lead, and contact persons.
+    Tries every possible avenue: direct fields, contact person, 
+    party links, dynamic links, and customer/supplier records.
     """
     if not doc:
         return None
-        
-    # 1. Try direct fields on the document
-    phone = (getattr(doc, "mobile_no", None) or 
-            getattr(doc, "phone", None) or 
-            getattr(doc, "contact_mobile", None) or
-            getattr(doc, "customer_mobile", None))
     
+    # List of all possible phone field names to check
+    PHONE_FIELDS = ["mobile_no", "phone", "contact_mobile", "customer_mobile", 
+                    "whatsapp", "whatsapp_no", "cell_phone", "mobile"]
+    
+    def _extract_phone(record):
+        """Try to extract a phone from a dict/record trying all field names."""
+        if not record:
+            return None
+        for f in PHONE_FIELDS:
+            val = record.get(f) if isinstance(record, dict) else getattr(record, f, None)
+            if val and str(val).strip():
+                return str(val).strip()
+        return None
+        
+    # 1. Try direct fields on the document itself
+    phone = _extract_phone(doc)
     if phone:
         return phone
         
-    # 2. Check for contact_person (Link to Contact)
-    contact_person = getattr(doc, "contact_person", None)
+    # 2. Check contact_person (Link to Contact) — common in invoices
+    contact_person = getattr(doc, "contact_person", None) or getattr(doc, "contact_name", None)
     if contact_person:
         try:
-            # Look for mobile_no or phone in Contact
-            res = frappe.db.get_value("Contact", contact_person, ["mobile_no", "phone"], as_dict=True)
-            if res:
-                p = res.mobile_no or res.phone
-                if p: return p
+            contact_doc = frappe.db.get_value("Contact", contact_person, PHONE_FIELDS, as_dict=True)
+            phone = _extract_phone(contact_doc)
+            if phone: return phone
         except:
             pass
             
-    # 3. Check for party_type and party (Common in Payment Entry, Journal Entry)
+    # 3. Check party_type + party (Payment Entry, Journal Entry)
     party_type = getattr(doc, "party_type", None)
     party = getattr(doc, "party", None)
     if party_type and party:
+        # 3a. Try to get phone directly from the party (Customer/Supplier/Employee)
         try:
-            # Common party types have mobile_no or phone
-            res = frappe.db.get_value(party_type, party, ["mobile_no", "phone"], as_dict=True)
-            if res:
-                p = res.mobile_no or res.phone
-                if p: return p
+            party_doc = frappe.db.get_value(party_type, party, PHONE_FIELDS, as_dict=True)
+            phone = _extract_phone(party_doc)
+            if phone: return phone
+        except:
+            pass
+        
+        # 3b. Find Contact linked to this party via Dynamic Link
+        try:
+            contact_name = frappe.db.get_value("Dynamic Link", {
+                "link_doctype": party_type,
+                "link_name": party,
+                "parenttype": "Contact"
+            }, "parent")
+            if contact_name:
+                contact_doc = frappe.db.get_value("Contact", contact_name, PHONE_FIELDS, as_dict=True)
+                phone = _extract_phone(contact_doc)
+                if phone: return phone
         except:
             pass
             
-    # 4. Check for linked entities (Customer, Supplier, Lead)
+    # 4. Check for linked entities (Customer, Supplier, Lead) as direct fields
     for fieldname in ["customer", "supplier", "lead"]:
         val = getattr(doc, fieldname, None)
         if val:
             doctype = fieldname.capitalize()
             try:
-                res = frappe.db.get_value(doctype, val, ["mobile_no", "phone"], as_dict=True)
-                if res:
-                    p = res.mobile_no or res.phone
-                    if p: return p
+                entity_doc = frappe.db.get_value(doctype, val, PHONE_FIELDS, as_dict=True)
+                phone = _extract_phone(entity_doc)
+                if phone: return phone
+            except:
+                pass
+            
+            # Also try finding Contact linked to this entity
+            try:
+                contact_name = frappe.db.get_value("Dynamic Link", {
+                    "link_doctype": doctype,
+                    "link_name": val,
+                    "parenttype": "Contact"
+                }, "parent")
+                if contact_name:
+                    contact_doc = frappe.db.get_value("Contact", contact_name, PHONE_FIELDS, as_dict=True)
+                    phone = _extract_phone(contact_doc)
+                    if phone: return phone
             except:
                 pass
                 
