@@ -469,20 +469,32 @@ def get_recipient_phone(doc):
         if not name:
             return None
         try:
-            # Get actual fields that exist on this doctype
-            valid_fields = frappe.get_meta(doctype).get_fieldnames_with_value()
+            meta = frappe.get_meta(doctype)
+            # 1. Check standard fields
+            valid_fields = meta.get_fieldnames_with_value()
             phone_candidates = ["mobile_no", "phone", "contact_mobile", "customer_mobile", 
                               "whatsapp", "whatsapp_no", "cell_phone", "mobile"]
-            # Only query fields that actually exist on this doctype
             fields_to_check = [f for f in phone_candidates if f in valid_fields]
-            if not fields_to_check:
-                return None
-            result = frappe.db.get_value(doctype, name, fields_to_check, as_dict=True)
-            if result:
-                for f in fields_to_check:
-                    val = result.get(f)
-                    if val and str(val).strip():
-                        return str(val).strip()
+            
+            if fields_to_check:
+                result = frappe.db.get_value(doctype, name, fields_to_check, as_dict=True)
+                if result:
+                    for f in fields_to_check:
+                        val = result.get(f)
+                        if val and str(val).strip():
+                            return str(val).strip()
+            
+            # 2. Check child tables (common in newer Contact doctype)
+            if doctype == "Contact" and meta.has_field("phone_nos"):
+                # Try to get numbers from the 'Contact Phone' child table
+                phones = frappe.get_all("Contact Phone", 
+                    filters={"parent": name, "parenttype": "Contact"},
+                    fields=["phone", "is_primary_mobile", "is_primary_phone"],
+                    order_by="is_primary_mobile desc, is_primary_phone desc"
+                )
+                for p in phones:
+                    if p.phone and str(p.phone).strip():
+                        return str(p.phone).strip()
         except Exception:
             pass
         return None
@@ -493,7 +505,7 @@ def get_recipient_phone(doc):
         if val and str(val).strip():
             return str(val).strip()
         
-    # 2. Check contact_person (Link to Contact) — Payment Entry has this!
+    # 2. Check contact_person (Link to Contact) — common in Payment Entry
     contact_person = getattr(doc, "contact_person", None) or getattr(doc, "contact_name", None)
     if contact_person:
         phone = _safe_get_phone("Contact", contact_person)
@@ -503,7 +515,7 @@ def get_recipient_phone(doc):
     party_type = getattr(doc, "party_type", None)
     party = getattr(doc, "party", None)
     if party_type and party:
-        # 3a. Try to get phone directly from the party record
+        # 3a. Try party record directly
         phone = _safe_get_phone(party_type, party)
         if phone: return phone
         
@@ -520,7 +532,7 @@ def get_recipient_phone(doc):
         except Exception:
             pass
             
-    # 4. Check for linked entities (Customer, Supplier, Lead) as direct fields
+    # 4. Check for linked entities (Customer, Supplier, Lead)
     for fieldname in ["customer", "supplier", "lead"]:
         val = getattr(doc, fieldname, None)
         if val:
