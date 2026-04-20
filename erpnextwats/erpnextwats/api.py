@@ -710,7 +710,10 @@ def send_via_template(docname, doctype, template_id, phone=None):
         recipient = get_recipient_phone(doc)
 
     if not recipient:
-        return {"status": "missing_phone", "message": "No phone number found. Please add a phone number to the customer or document."}
+        party = getattr(doc, 'party', getattr(doc, 'customer', getattr(doc, 'supplier', 'NONE')))
+        contact = getattr(doc, 'contact_person', getattr(doc, 'contact_name', 'NONE'))
+        debug_msg = f"DEBUG: Backend sees Party='{party}' and Contact='{contact}'."
+        return {"status": "missing_phone", "message": f"No phone number found. {debug_msg} Please check the linked Contact record."}
 
     ctx = get_rendering_context(doc)
     message = frappe.render_template(template.message, ctx)
