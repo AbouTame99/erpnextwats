@@ -578,11 +578,6 @@ def get_recipient_phone(doc):
     # Final Fallback: Log failure trace
     final_log = "\n".join(lookup_trace)
     frappe.log_error(final_log, f"WhatsApp Phone Lookup Trace: {doc.name}")
-    
-    # DEBUG: Throw the log directly to the UI so we can see it
-    frappe.msgprint(f"<b>Diagnostic Phone Lookup Log:</b><br><pre>{final_log}</pre>")
-    frappe.throw(f"No phone number found for {doc.name}. Checked direct fields, Contact link, and Party links. See Diagnostic Log above.")
-    
     return None
 
 def _log_wrapper(log_status, *args, **kwargs):
