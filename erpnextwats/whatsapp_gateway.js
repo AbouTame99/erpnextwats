@@ -108,8 +108,7 @@ class WhatsAppSession {
                 dataPath: BASE_AUTH_DIR
             }),
             webVersionCache: {
-                type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+                type: 'none'
             },
             puppeteer: {
                 headless: true,
@@ -310,7 +309,10 @@ class WhatsAppSession {
 function getSharedSession() {
     if (!sharedSession || sharedSession.status === 'disconnected' || sharedSession.status === 'error') {
         sharedSession = new WhatsAppSession(SHARED_SESSION_ID);
-        sharedSession.initialize();
+        sharedSession.initialize().catch(e => {
+            console.error('[SHARED SESSION] Background init failed:', e.message);
+            logError('Session', e, { step: 'background_init' });
+        });
     }
     return sharedSession;
 }
@@ -456,13 +458,7 @@ async function boot() {
     }
 }
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`WhatsApp Gateway running on port ${port}`);
-    console.log(`Using SHARED SESSION mode - all users share one WhatsApp connection`);
-    boot();
-});
-
-// Global Error Handler
+// Global Error Handler — MUST be registered BEFORE app.listen()
 app.use((err, req, res, next) => {
     logError('System', err, {
         method: req.method,
@@ -484,4 +480,10 @@ app.use((err, req, res, next) => {
         status: 'error',
         message: err.message || 'Internal Server Error'
     });
+});
+
+app.listen(port, '0.0.0.0', () => {
+    console.log(`WhatsApp Gateway running on port ${port}`);
+    console.log(`Using SHARED SESSION mode - all users share one WhatsApp connection`);
+    boot();
 });
