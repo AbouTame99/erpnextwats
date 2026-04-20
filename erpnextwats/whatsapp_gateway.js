@@ -233,11 +233,23 @@ class WhatsAppSession {
         let hasMedia = mediaData && mediaData.data;
 
         try {
+            // Resolve the official WhatsApp ID to prevent "No LID" errors
+            let finalId = chatId;
+            try {
+                const resolvedId = await this.client.getNumberId(chatId);
+                if (resolvedId) {
+                    finalId = resolvedId._serialized;
+                    console.log(`[SHARED SESSION] Resolved ${chatId} to ${finalId}`);
+                }
+            } catch (resolveErr) {
+                console.warn(`[SHARED SESSION] ID resolution failed for ${chatId}, attempting with original.`);
+            }
+
             if (hasMedia) {
                 const media = new MessageMedia(mediaData.mimetype, mediaData.data, mediaData.filename);
-                result = await this.client.sendMessage(chatId, media, { caption: message });
+                result = await this.client.sendMessage(finalId, media, { caption: message });
             } else {
-                result = await this.client.sendMessage(chatId, message);
+                result = await this.client.sendMessage(finalId, message);
             }
             
             // Update activity tracking
