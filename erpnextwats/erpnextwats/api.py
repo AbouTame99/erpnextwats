@@ -599,7 +599,7 @@ def get_bulk_progress(history_name):
 def get_templates_for_doctype(doctype):
     """Returns all active WhatsApp templates for a specific doctype."""
     templates = frappe.get_all("WhatsApp Template",
-        filters={"doctype_name": doctype, "disabled": 0},
+        filters={"doctype_name": doctype},
         fields=["name", "template_name", "message"]
     )
     return templates
