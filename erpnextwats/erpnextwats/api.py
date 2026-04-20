@@ -596,6 +596,15 @@ def get_bulk_progress(history_name):
         return {"status": "error", "message": str(e)}
 
 @frappe.whitelist()
+def get_templates_for_doctype(doctype):
+    """Returns all active WhatsApp templates for a specific doctype."""
+    templates = frappe.get_all("WhatsApp Template",
+        filters={"doctype_name": doctype, "disabled": 0},
+        fields=["name", "template_name", "message"]
+    )
+    return templates
+
+@frappe.whitelist()
 def get_bulk_history():
     """Get all bulk send history."""
     try:
