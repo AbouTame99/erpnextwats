@@ -577,7 +577,10 @@ def get_recipient_phone(doc):
                 
     # Final Fallback: Log failure trace
     final_log = "\n".join(lookup_trace)
-    frappe.log_error(final_log, f"WhatsApp Phone Lookup Trace: {doc.name}")
+    try:
+        frappe.log_error(title=f"WhatsApp Phone Lookup Trace: {doc.name}", message=final_log)
+    except Exception:
+        pass
     return None
 
 def _log_wrapper(log_status, *args, **kwargs):
