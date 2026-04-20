@@ -465,7 +465,6 @@ def get_recipient_phone(doc):
     def _is_raw_phone(text):
         if not text or not isinstance(text, str): return False
         digits = ''.join(filter(str.isdigit, text))
-        # If it has at least 8 digits and most characters are numbers/spaces/plus
         return len(digits) >= 8
         
     def _extract_digits(text):
@@ -506,6 +505,22 @@ def get_recipient_phone(doc):
         except Exception:
             pass
         return None
+
+    def _find_phone_for_contact_name(contact_name):
+        """Try to find a phone by treating contact_name as ID, or searching by first_name"""
+        # Try as strict ID
+        phone = _safe_get_phone("Contact", contact_name)
+        if phone: return phone
+        
+        # Try as first_name search
+        try:
+            contacts = frappe.get_all("Contact", filters={"first_name": ["like", f"%{contact_name}%"]}, fields=["name"], ignore_permissions=True)
+            for c in contacts:
+                phone = _safe_get_phone("Contact", c.name)
+                if phone: return phone
+        except Exception:
+            pass
+        return None
     
     # 1. Try direct fields on the document itself
     for f in ["mobile_no", "phone", "contact_mobile", "customer_mobile", "whatsapp", "mobile"]:
@@ -516,12 +531,10 @@ def get_recipient_phone(doc):
     # 2. Check contact_person field directly
     contact_person = getattr(doc, "contact_person", None) or getattr(doc, "contact_name", None)
     if contact_person:
-        # User might have typed the phone number directly into this field
         if _is_raw_phone(contact_person):
             return _extract_digits(contact_person)
             
-        # Otherwise, treat it as a Contact link
-        phone = _safe_get_phone("Contact", contact_person)
+        phone = _find_phone_for_contact_name(contact_person)
         if phone: return phone
             
     # 3. Check party_type + party (Payment Entry, Journal Entry)
@@ -531,14 +544,16 @@ def get_recipient_phone(doc):
         phone = _safe_get_phone(party_type, party)
         if phone: return phone
         
+        # Check ALL Contacts linked to this party
         try:
-            contact_name = frappe.db.get_value("Dynamic Link", {
+            links = frappe.get_all("Dynamic Link", filters={
                 "link_doctype": party_type,
                 "link_name": party,
                 "parenttype": "Contact"
-            }, "parent")
-            if contact_name:
-                phone = _safe_get_phone("Contact", contact_name)
+            }, fields=["parent"], ignore_permissions=True)
+            
+            for link in links:
+                phone = _safe_get_phone("Contact", link.parent)
                 if phone: return phone
         except Exception:
             pass
@@ -552,13 +567,14 @@ def get_recipient_phone(doc):
             if phone: return phone
             
             try:
-                contact_name = frappe.db.get_value("Dynamic Link", {
+                links = frappe.get_all("Dynamic Link", filters={
                     "link_doctype": doctype,
                     "link_name": val,
                     "parenttype": "Contact"
-                }, "parent")
-                if contact_name:
-                    phone = _safe_get_phone("Contact", contact_name)
+                }, fields=["parent"], ignore_permissions=True)
+                
+                for link in links:
+                    phone = _safe_get_phone("Contact", link.parent)
                     if phone: return phone
             except Exception:
                 pass
