@@ -509,3 +509,32 @@ app.listen(port, '0.0.0.0', () => {
     console.log(`Using SHARED SESSION mode - all users share one WhatsApp connection`);
     boot();
 });
+
+// Graceful shutdown to prevent Zombie Chrome processes
+function cleanupAndExit() {
+    console.log('[SYSTEM] Initiating graceful shutdown...');
+    if (sharedSession && sharedSession.client) {
+        try {
+            console.log('[SYSTEM] Destroying WhatsApp client to release Chrome lock...');
+            sharedSession.client.destroy().then(() => {
+                console.log('[SYSTEM] Client destroyed successfully.');
+                process.exit(0);
+            }).catch(err => {
+                console.error('[SYSTEM] Error destroying client:', err.message);
+                process.exit(1);
+            });
+        } catch (err) {
+            process.exit(1);
+        }
+    } else {
+        process.exit(0);
+    }
+}
+
+process.on('SIGINT', cleanupAndExit);
+process.on('SIGTERM', cleanupAndExit);
+process.on('uncaughtException', (err) => {
+    logError('System', err, { context: 'Uncaught Exception' });
+    console.error('UNCAUGHT EXCEPTION:', err);
+    cleanupAndExit();
+});
