@@ -744,204 +744,116 @@ def send_via_template(docname, doctype, template_id, phone=None, manual_contact=
             pass
 
     if not recipient:
-        recipient = get_recipient_phone(doc)
-
-    if not recipient:
         return {"status": "missing_phone", "message": "No phone number found. Please select a valid Contact with a phone number, or check the document."}
 
-    ctx = get_rendering_context(doc)
-    message = frappe.render_template(template.message, ctx)
+    # Queue the actual sending in the background
+    frappe.enqueue(
+        'erpnextwats.erpnextwats.api.send_via_template_background',
+        doctype=doctype,
+        docname=docname,
+        template_id=template_id,
+        recipient=recipient,
+        queue='short',
+        job_name=f"whatsapp_send_{doctype}_{docname}"
+    )
 
-    media = None
-    if template.attach_pdf:
-        pdf_content = frappe.get_print(doctype, docname, as_pdf=True)
-        media = {
-            "mimetype": "application/pdf",
-            "data": base64.b64encode(pdf_content).decode('utf-8'),
-            "filename": f"{docname}.pdf"
-        }
-    elif template.custom_media:
-        try:
-            # Get file by URL - try multiple methods
-            file_url = template.custom_media.strip()
-            file_doc = None
-            
-            # Normalize URL - remove leading slash
-            normalized_url = file_url.lstrip('/')
-            
-            # Try different URL variations
-            url_variations = [
-                file_url,  # Original
-                normalized_url,  # Without leading slash
-                f"/{normalized_url}",  # With leading slash
-            ]
-            
-            # If it starts with 'files/', also try 'private/files/'
-            if normalized_url.startswith('files/'):
-                url_variations.append(normalized_url.replace('files/', 'private/files/', 1))
-                url_variations.append(f"/{normalized_url.replace('files/', 'private/files/', 1)}")
-            
-            # If it starts with 'private/files/', also try 'files/'
-            if normalized_url.startswith('private/files/'):
-                url_variations.append(normalized_url.replace('private/files/', 'files/', 1))
-                url_variations.append(f"/{normalized_url.replace('private/files/', 'files/', 1)}")
-            
-            # Method 1: Try direct lookup with all variations
-            for url_var in url_variations:
-                if not file_doc:
-                    try:
-                        file_doc = frappe.get_doc("File", {"file_url": url_var})
-                        break
-                    except:
-                        pass
-            
-            # Method 2: Try SQL query with LIKE to find file
-            filename = os.path.basename(normalized_url)
-            
-            if not file_doc:
-                try:
-                    files = frappe.db.sql("""
-                        SELECT name FROM `tabFile` 
-                        WHERE file_name = %s OR file_url LIKE %s OR file_url LIKE %s
-                        LIMIT 1
-                    """, (filename, f"%{filename}", f"%{normalized_url}"), as_dict=True)
-                    if files:
-                        file_doc = frappe.get_doc("File", files[0].name)
-                except Exception as e:
-                    frappe.logger().error(f"SQL file lookup error: {str(e)}")
-            
-            # Method 3: Try to find by filename only
-            if not file_doc:
-                try:
-                    file_doc = frappe.get_doc("File", {"file_name": filename})
-                except:
-                    pass
-            
-            # Method 4: Try to find by partial filename match
-            if not file_doc:
-                try:
-                    all_files = frappe.get_all("File", 
-                        filters={"file_name": ["like", f"%{filename}%"]},
-                        fields=["name", "file_url"],
-                        limit=50)
-                    for f in all_files:
-                        if filename in f.file_url or normalized_url in f.file_url or file_url in f.file_url:
-                            file_doc = frappe.get_doc("File", f.name)
-                            break
-                except Exception as e:
-                    frappe.logger().error(f"File search error: {str(e)}")
-            
-            if not file_doc:
-                raise Exception(f"File not found: {file_url}. Tried variations: {', '.join(url_variations[:5])}")
-            
-            # Get filename with extension
-            original_filename = file_doc.file_name or "attachment"
-            file_ext = os.path.splitext(original_filename)[1].lower()
-            
-            # Determine mimetype
-            mimetype = "application/octet-stream"
-            
-            # Image types
-            image_types = {
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.png': 'image/png',
-                '.gif': 'image/gif',
-                '.webp': 'image/webp',
-                '.bmp': 'image/bmp',
-                '.svg': 'image/svg+xml'
-            }
-            
-            # Document types
-            doc_types = {
-                '.pdf': 'application/pdf',
-                '.doc': 'application/msword',
-                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                '.xls': 'application/vnd.ms-excel',
-                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                '.txt': 'text/plain',
-                '.csv': 'text/csv'
-            }
-            
-            # Check extension first
-            if file_ext in image_types:
-                mimetype = image_types[file_ext]
-            elif file_ext in doc_types:
-                mimetype = doc_types[file_ext]
-            elif hasattr(file_doc, 'file_type') and file_doc.file_type:
-                mimetype = file_doc.file_type
-            elif original_filename:
-                guessed_mime, _ = mimetypes.guess_type(original_filename)
-                if guessed_mime:
-                    mimetype = guessed_mime
-            
-            # Ensure filename has extension
-            if not file_ext and mimetype.startswith('image/'):
-                # Add extension based on mimetype
-                ext_map = {
-                    'image/jpeg': '.jpg',
-                    'image/png': '.png',
-                    'image/gif': '.gif',
-                    'image/webp': '.webp'
-                }
-                file_ext = ext_map.get(mimetype, '.jpg')
-                original_filename = original_filename + file_ext
-            elif not file_ext and mimetype == 'application/pdf':
-                original_filename = original_filename + '.pdf'
-            
-            # Get file content
-            file_content = file_doc.get_content()
-            if isinstance(file_content, str):
-                file_content = file_content.encode('utf-8')
-            
-            media = {
-                "mimetype": mimetype,
-                "data": base64.b64encode(file_content).decode('utf-8'),
-                "filename": original_filename
-            }
-        except Exception as e:
-            frappe.logger().error(f"Error processing custom media: {str(e)}")
-            frappe.logger().error(f"File URL: {template.custom_media}")
-            media = None
-
-    data = {
-        "userId": "shared_company_session",
-        "to": recipient,
-        "message": message,
-        "media": media
+    return {
+        "status": "success", 
+        "message": "Message has been queued for sending. You can close this dialog."
     }
 
-    # Send message and log result
-    start_time = time.time()
-    result = proxy_to_service("POST", "api/whatsapp/send", data)
-    duration_ms = int((time.time() - start_time) * 1000)
-    
-    # Log the message send attempt
-    if result.get("status") == "success":
-        log_success(
-            activity_type="Message Sent",
-            template=template_id,
-            customer=doc.customer if hasattr(doc, 'customer') else doc.name,
-            customer_phone=recipient,
-            message_content=message[:200],
-            duration_ms=duration_ms,
-            reference_doctype=doctype,
-            reference_name=docname
-        )
-    else:
-        log_error(
-            activity_type="Message Failed",
-            error=result.get("message", "Unknown error"),
-            template=template_id,
-            customer=doc.customer if hasattr(doc, 'customer') else doc.name,
-            customer_phone=recipient,
-            message_content=message[:200],
-            duration_ms=duration_ms,
-            reference_doctype=doctype,
-            reference_name=docname
-        )
-    
-    return result
+def send_via_template_background(doctype, docname, template_id, recipient):
+    """Background task to handle the actual network call and logging."""
+    try:
+        doc = frappe.get_doc(doctype, docname)
+        template = frappe.get_doc("WhatsApp Template", template_id)
+        
+        ctx = get_rendering_context(doc)
+        message = frappe.render_template(template.message, ctx)
+
+        media = None
+        if template.attach_pdf:
+            pdf_content = frappe.get_print(doctype, docname, as_pdf=True)
+            media = {
+                "mimetype": "application/pdf",
+                "data": base64.b64encode(pdf_content).decode('utf-8'),
+                "filename": f"{docname}.pdf"
+            }
+        elif template.custom_media:
+            try:
+                # Get file by URL - try multiple methods
+                file_url = template.custom_media.strip()
+                file_doc = None
+                normalized_url = file_url.lstrip('/')
+                url_variations = [file_url, normalized_url, f"/{normalized_url}"]
+                
+                if normalized_url.startswith('files/'):
+                    url_variations.append(normalized_url.replace('files/', 'private/files/', 1))
+                    url_variations.append(f"/{normalized_url.replace('files/', 'private/files/', 1)}")
+                
+                for url_var in url_variations:
+                    if not file_doc:
+                        try:
+                            file_doc = frappe.get_doc("File", {"file_url": url_var})
+                            break
+                        except: pass
+                
+                if not file_doc:
+                    filename = os.path.basename(normalized_url)
+                    files = frappe.db.sql("SELECT name FROM `tabFile` WHERE file_name = %s OR file_url LIKE %s LIMIT 1", (filename, f"%{filename}"), as_dict=True)
+                    if files: file_doc = frappe.get_doc("File", files[0].name)
+                
+                if file_doc:
+                    original_filename = file_doc.file_name or "attachment"
+                    mimetype = mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+                    file_content = file_doc.get_content()
+                    if isinstance(file_content, str): file_content = file_content.encode('utf-8')
+                    media = {
+                        "mimetype": mimetype,
+                        "data": base64.b64encode(file_content).decode('utf-8'),
+                        "filename": original_filename
+                    }
+            except Exception as e:
+                frappe.logger().error(f"Error processing custom media in background: {str(e)}")
+
+        data = {
+            "userId": "shared_company_session",
+            "to": recipient,
+            "message": message,
+            "media": media
+        }
+
+        # Send message and log result
+        start_time = time.time()
+        result = proxy_to_service("POST", "api/whatsapp/send", data)
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        # Log result
+        if result.get("status") == "success":
+            log_success(
+                activity_type="Message Sent (BG)",
+                template=template_id,
+                customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+                customer_phone=recipient,
+                message_content=message[:200],
+                duration_ms=duration_ms,
+                reference_doctype=doctype,
+                reference_name=docname
+            )
+        else:
+            log_error(
+                activity_type="Message Failed (BG)",
+                error=result.get("message", "Unknown error"),
+                template=template_id,
+                customer=doc.customer if hasattr(doc, 'customer') else doc.name,
+                customer_phone=recipient,
+                message_content=message[:200],
+                duration_ms=duration_ms,
+                reference_doctype=doctype,
+                reference_name=docname
+            )
+    except Exception as e:
+        frappe.logger().error(f"Background WhatsApp send fatal error: {str(e)}")
 
 @frappe.whitelist()
 def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=None, delay_seconds=3, max_per_hour=50):
@@ -1662,27 +1574,40 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
     }
 
 def handle_auto_send(doc, method):
-    """Handles automatic sending of WhatsApp messages based on template settings."""
-    # Only process on_submit events - ignore on_update/on_save
+    """Handles automatic sending of WhatsApp messages in the background to avoid blocking submission."""
+    # Only process on_submit events
     if method != "on_submit":
         return
     
     if not doc or not hasattr(doc, 'doctype'):
         return
-    
+
+    # Queue the auto-send logic to run in the background
+    frappe.enqueue(
+        'erpnextwats.erpnextwats.api.handle_auto_send_background',
+        doctype=doc.doctype,
+        docname=doc.name,
+        queue='short',
+        job_name=f"whatsapp_auto_send_{doc.doctype}_{doc.name}"
+    )
+
+def handle_auto_send_background(doctype, docname):
+    """Actual logic for auto-sending, running in the background."""
+    try:
+        doc = frappe.get_doc(doctype, docname)
+    except Exception:
+        return
+
     # Skip if we're in a migration context
     if getattr(frappe.flags, 'in_migrate', False) or getattr(frappe.flags, 'in_install', False):
         return
     
     # Skip during migration or if fields don't exist yet
     try:
-        # Check if the new fields exist in the database schema
         columns = frappe.db.get_table_columns("WhatsApp Template")
         if 'enable_auto_send' not in columns:
-            # Fields don't exist yet, skip auto-send
             return
     except:
-        # If we can't check, skip to be safe
         return
     
     # Get all templates for this doctype with auto-send enabled
@@ -1695,7 +1620,6 @@ def handle_auto_send(doc, method):
             fields=["name", "auto_send_mode", "trigger_status", "visual_conditions"]
         )
     except Exception as e:
-        # If fields don't exist, just return silently
         frappe.logger().debug(f"Auto-send fields not available yet: {str(e)}")
         return
     
@@ -1709,85 +1633,33 @@ def handle_auto_send(doc, method):
         reference_doctype=doc.doctype,
         reference_name=doc.name,
         metadata={
-            "trigger_method": "on_submit",
-            "template_count": len(templates),
-            "doc_status": doc.status if hasattr(doc, 'status') else None,
-            "docstatus": doc.docstatus if hasattr(doc, 'docstatus') else None
+            "trigger_method": "on_submit_background",
+            "template_count": len(templates)
         }
     )
     
     for template_data in templates:
         try:
             template = frappe.get_doc("WhatsApp Template", template_data.name)
+            auto_send_mode = getattr(template, 'auto_send_mode', None) or getattr(template, 'auto_send_timing', 'On Submit')
             
-            # Get auto send mode (handle both old and new field names)
-            auto_send_mode = getattr(template, 'auto_send_mode', None)
-            if not auto_send_mode:
-                # Fallback for backward compatibility
-                auto_send_mode = getattr(template, 'auto_send_timing', 'On Submit')
-            
-            # Only process On Submit and On Status Change modes here
-            # Recurring and Monitor Documents modes are handled by schedulers
             if auto_send_mode in ["Recurring", "Monitor Documents"]:
                 continue
             
             # For On Status Change mode, check if we need to process
             if auto_send_mode == "On Status Change":
                 trigger_status = getattr(template, 'trigger_status', None)
-                if trigger_status:
-                    # Check if current document status matches trigger status
-                    current_status = getattr(doc, 'status', None)
-                    if current_status != trigger_status:
-                        log_info(
-                            activity_type="Auto Send Triggered",
-                            status="Info",
-                            template=template.name,
-                            reference_doctype=doc.doctype,
-                            reference_name=doc.name,
-                            metadata={
-                                "action": "skipped",
-                                "reason": "status_mismatch",
-                                "current_status": current_status,
-                                "trigger_status": trigger_status
-                            }
-                        )
-                        continue
+                if trigger_status and getattr(doc, 'status', None) != trigger_status:
+                    continue
             
             # Check visual conditions/filters if specified
             visual_conditions = getattr(template, 'visual_conditions', None)
-            if visual_conditions:
-                if not check_visual_conditions(doc, visual_conditions):
-                    log_info(
-                        activity_type="Auto Send Triggered",
-                        status="Info",
-                        template=template.name,
-                        reference_doctype=doc.doctype,
-                        reference_name=doc.name,
-                        metadata={
-                            "action": "skipped",
-                            "reason": "conditions_not_met",
-                            "conditions": visual_conditions
-                        }
-                    )
-                    continue
+            if visual_conditions and not check_visual_conditions(doc, visual_conditions):
+                continue
             
             # All checks passed - send the message
-            log_info(
-                activity_type="Auto Send Triggered",
-                status="Info",
-                template=template.name,
-                reference_doctype=doc.doctype,
-                reference_name=doc.name,
-                metadata={
-                    "action": "processing",
-                    "auto_send_mode": auto_send_mode,
-                    "trigger_status": getattr(template, 'trigger_status', None),
-                    "conditions_applied": bool(visual_conditions)
-                }
-            )
             send_auto_message(doc, template.name)
         except Exception as e:
-            # Log error with details
             log_error(
                 activity_type="Auto Send Failed",
                 error=e,
