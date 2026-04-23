@@ -112,6 +112,7 @@ class WhatsAppSession {
             },
             puppeteer: {
                 headless: true,
+                protocolTimeout: 0, // Disable protocol timeout to prevent crashes during slow loads
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
