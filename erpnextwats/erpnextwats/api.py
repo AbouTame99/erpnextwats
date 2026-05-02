@@ -48,8 +48,21 @@ def proxy_to_service(method, endpoint=None, data=None, **kwargs):
         else:
             response = requests.get(url, timeout=30)
         
-        response.raise_for_status()
-        return response.json()
+        try:
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            try:
+                # Try to parse the error message from the JSON response
+                error_data = response.json()
+                error_msg = error_data.get("message", str(e))
+                # Add full stack trace if it's provided by the gateway
+                if error_data.get("stack"):
+                    error_msg += f"\nStack: {error_data.get('stack')}"
+                return {"status": "error", "message": error_msg}
+            except ValueError:
+                # Fallback if the response is not JSON
+                return {"status": "error", "message": str(e)}
     except Exception as e:
         frappe.logger().error(f"Gateway connection error: {str(e)}")
         return {"status": "error", "message": f"Gateway error: {str(e)}"}
@@ -742,6 +755,10 @@ def send_via_template(docname, doctype, template_id, phone=None, manual_contact=
                 
         except Exception:
             pass
+
+    # Fallback to automatic phone lookup if no manual contact/phone was provided
+    if not recipient:
+        recipient = get_recipient_phone(doc)
 
     if not recipient:
         return {"status": "missing_phone", "message": "No phone number found. Please select a valid Contact with a phone number, or check the document."}

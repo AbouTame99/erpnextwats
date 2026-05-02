@@ -62,6 +62,11 @@ app.use((req, res, next) => {
 
 // Request logging middleware
 app.use((req, res, next) => {
+    // Don't log status checks to keep logs clean
+    if (req.url === '/api/whatsapp/status') {
+        return next();
+    }
+    
     logEvent('API', 'Incoming Request', {
         method: req.method,
         url: req.url,
@@ -96,6 +101,38 @@ class WhatsAppSession {
         if (this.status === 'initializing' || this.status === 'ready') return;
 
         console.log(`[SHARED SESSION] Initializing...`);
+        
+        // AUTO-CLEANUP: Kill zombie processes and remove stale lock files
+        try {
+            const { execSync } = require('child_process');
+            const sessionDir = path.join(BASE_AUTH_DIR, `session-${this.sessionId}`);
+            
+            // 1. Kill any existing chrome processes using our session directory
+            if (process.platform === 'linux') {
+                execSync(`pkill -f "${sessionDir}" || true`);
+                console.log(`[SHARED SESSION] Killed zombie chrome processes`);
+            }
+
+            // 2. Remove stale browser lock files
+            const lockFiles = [
+                path.join(sessionDir, 'Default', 'SingletonLock'),
+                path.join(sessionDir, 'SingletonLock'),
+                path.join(sessionDir, 'Default', 'SingletonCookie'),
+                path.join(sessionDir, 'SingletonCookie'),
+                path.join(sessionDir, 'Default', 'SingletonSocket'),
+                path.join(sessionDir, 'SingletonSocket')
+            ];
+            
+            lockFiles.forEach(file => {
+                if (fs.existsSync(file)) {
+                    fs.unlinkSync(file);
+                    console.log(`[SHARED SESSION] Cleaned up stale lock file: ${path.basename(file)}`);
+                }
+            });
+        } catch (err) {
+            console.warn(`[SHARED SESSION] Cleanup warning: ${err.message}`);
+        }
+
         logEvent('Session', 'Initializing', {
             sessionId: this.sessionId,
             timestamp: new Date().toISOString()
@@ -108,7 +145,8 @@ class WhatsAppSession {
                 dataPath: BASE_AUTH_DIR
             }),
             webVersionCache: {
-                type: 'none'
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
             },
             puppeteer: {
                 headless: true,
