@@ -4056,3 +4056,351 @@ def test_dead_stock_send(template_name, phone):
 #
 # ===== END AUTO-SEND FILTER EXAMPLES =====
 
+
+# ===== FULL SYSTEM DIAGNOSIS =====
+
+@frappe.whitelist()
+def run_full_diagnosis(phone_number=None, test_message=None):
+    """
+    Runs every possible health check on the WhatsApp integration and returns
+    full, untruncated error details for each check.
+
+    Returns a list of result dicts:
+        { key, label, section, status ('pass'|'fail'|'warn'), message, details }
+    """
+    results = []
+
+    def ok(key, label, section, message, details=None):
+        results.append({"key": key, "label": label, "section": section,
+                         "status": "pass", "message": message, "details": details})
+
+    def fail(key, label, section, message, details=None):
+        results.append({"key": key, "label": label, "section": section,
+                         "status": "fail", "message": message, "details": details})
+
+    def warn(key, label, section, message, details=None):
+        results.append({"key": key, "label": label, "section": section,
+                         "status": "warn", "message": message, "details": details})
+
+    # ── 1. Frappe Database ──────────────────────────────────────────────────
+    key, label, section = "frappe_db", "Frappe Database Connection", "Core Infrastructure"
+    try:
+        row = frappe.db.sql("SELECT 1 AS ok", as_dict=True)
+        db_name = frappe.conf.get("db_name", "(unknown)")
+        ok(key, label, section,
+           f"Connected to database '{db_name}'",
+           {"db_name": db_name, "result": row})
+    except Exception as e:
+        fail(key, label, section,
+             "Database query failed",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 2. Redis Cache ──────────────────────────────────────────────────────
+    key, label, section = "redis_cache", "Redis Cache", "Core Infrastructure"
+    try:
+        test_val = "diag_ping_ok"
+        frappe.cache().set("__diag_ping__", test_val, expires_in_sec=30)
+        got = frappe.cache().get("__diag_ping__")
+        if got == test_val or (isinstance(got, bytes) and got.decode() == test_val):
+            ok(key, label, section, "Redis set/get round-trip succeeded", {"wrote": test_val, "read": str(got)})
+        else:
+            warn(key, label, section,
+                 "Redis returned unexpected value (may be version mismatch)",
+                 {"wrote": test_val, "read": str(got)})
+    except Exception as e:
+        fail(key, label, section,
+             "Redis cache is not reachable",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 3. Background Worker Queue ──────────────────────────────────────────
+    key, label, section = "worker_queue", "Background Worker / Queue", "Core Infrastructure"
+    try:
+        from rq import Queue
+        from redis import Redis
+        redis_conn = Redis.from_url(frappe.conf.get("redis_queue", "redis://localhost:6379"))
+        q_names = ["default", "short", "long"]
+        info = {}
+        for qn in q_names:
+            q = Queue(qn, connection=redis_conn)
+            info[qn] = {"jobs_count": len(q)}
+        ok(key, label, section, "RQ queues reachable", info)
+    except Exception as e:
+        fail(key, label, section,
+             "Could not connect to RQ / worker queue",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 4. Gateway TCP Reachability ─────────────────────────────────────────
+    key, label, section = "gateway_tcp", "Gateway TCP (localhost:3000)", "WhatsApp Gateway"
+    try:
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result_tcp = sock.connect_ex(("localhost", 3000))
+        sock.close()
+        if result_tcp == 0:
+            ok(key, label, section, "TCP port 3000 is open — gateway process is running")
+        else:
+            fail(key, label, section,
+                 f"TCP connection to localhost:3000 refused (error code {result_tcp}). "
+                 "The Node.js gateway is NOT running.",
+                 {"errno": result_tcp,
+                  "hint": "Start the gateway: cd erpnextwats && node index.js  (or pm2 start)"})
+    except Exception as e:
+        fail(key, label, section,
+             "TCP socket check raised an exception",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 5. Gateway HTTP Health ──────────────────────────────────────────────
+    key, label, section = "gateway_health", "Gateway HTTP Health", "WhatsApp Gateway"
+    try:
+        r = requests.get("http://localhost:3000/health", timeout=8)
+        if r.status_code == 200:
+            try:
+                body = r.json()
+            except Exception:
+                body = r.text[:500]
+            ok(key, label, section,
+               f"HTTP /health returned 200",
+               {"status_code": r.status_code, "response": body})
+        else:
+            warn(key, label, section,
+                 f"HTTP /health returned {r.status_code} (not 200)",
+                 {"status_code": r.status_code, "body": r.text[:1000]})
+    except requests.exceptions.ConnectionError as e:
+        fail(key, label, section,
+             "Cannot reach http://localhost:3000/health — gateway is not running or not listening",
+             {"error": str(e), "traceback": traceback.format_exc()})
+    except Exception as e:
+        fail(key, label, section,
+             "HTTP health check raised an unexpected exception",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 6. WhatsApp Session Status ──────────────────────────────────────────
+    key, label, section = "gateway_status", "WhatsApp Session Status", "WhatsApp Gateway"
+    try:
+        r = requests.get("http://localhost:3000/api/whatsapp/status", timeout=10)
+        try:
+            body = r.json()
+        except Exception:
+            body = {"raw": r.text[:1000]}
+
+        wa_status = body.get("status", "(no status field)")
+        if wa_status == "ready":
+            ok(key, label, section,
+               "WhatsApp session is READY (authenticated)",
+               body)
+        elif wa_status in ("qr", "pending", "initializing"):
+            warn(key, label, section,
+                 f"WhatsApp session status: '{wa_status}' — not fully authenticated yet",
+                 body)
+        else:
+            fail(key, label, section,
+                 f"WhatsApp session status: '{wa_status}' — not connected",
+                 body)
+    except requests.exceptions.ConnectionError as e:
+        fail(key, label, section,
+             "Cannot reach gateway — status endpoint unreachable",
+             {"error": str(e), "traceback": traceback.format_exc()})
+    except Exception as e:
+        fail(key, label, section,
+             "Session status check raised an exception",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 7. QR / Auth State ──────────────────────────────────────────────────
+    key, label, section = "gateway_qr", "QR / Auth State", "WhatsApp Gateway"
+    try:
+        endpoints_to_try = [
+            "http://localhost:3000/api/whatsapp/qr",
+            "http://localhost:3000/api/whatsapp/auth-state",
+            "http://localhost:3000/qr",
+        ]
+        found = None
+        errors = []
+        for ep in endpoints_to_try:
+            try:
+                r2 = requests.get(ep, timeout=6)
+                try:
+                    body2 = r2.json()
+                except Exception:
+                    body2 = {"raw": r2.text[:500]}
+                found = {"endpoint": ep, "status_code": r2.status_code, "body": body2}
+                break
+            except Exception as e2:
+                errors.append({"endpoint": ep, "error": str(e2)})
+
+        if found:
+            ok(key, label, section,
+               f"Auth/QR endpoint {found['endpoint']} returned {found['status_code']}",
+               found)
+        else:
+            warn(key, label, section,
+                 "No QR/auth endpoint responded — may not be implemented by this gateway version",
+                 {"tried": endpoints_to_try, "errors": errors})
+    except Exception as e:
+        fail(key, label, section,
+             "QR/auth state check raised an exception",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 8. Required DB Tables ───────────────────────────────────────────────
+    key, label, section = "db_tables", "Required Database Tables", "Database Checks"
+    required_tables = [
+        "WhatsApp Activity Log",
+        "WhatsApp Template",
+        "WhatsApp Bulk History",
+        "WhatsApp Template Customer",
+    ]
+    table_results = {}
+    all_ok = True
+    for dt in required_tables:
+        try:
+            table_name = f"tab{dt}"
+            exists = frappe.db.table_exists(dt)
+            if exists:
+                count = frappe.db.count(dt)
+                table_results[dt] = {"exists": True, "rows": count}
+            else:
+                table_results[dt] = {"exists": False}
+                all_ok = False
+        except Exception as e:
+            table_results[dt] = {"exists": False, "error": str(e)}
+            all_ok = False
+
+    if all_ok:
+        ok(key, label, section, "All required tables exist", table_results)
+    else:
+        missing = [k for k, v in table_results.items() if not v.get("exists")]
+        fail(key, label, section,
+             f"Missing tables: {', '.join(missing)}. Run bench migrate.",
+             table_results)
+
+    # ── 9. Templates Exist ──────────────────────────────────────────────────
+    key, label, section = "templates_exist", "WhatsApp Templates Exist", "Database Checks"
+    try:
+        templates = frappe.get_all("WhatsApp Template",
+                                   fields=["name", "template_name", "doctype_name", "enable_auto_send"],
+                                   limit=50)
+        if templates:
+            ok(key, label, section,
+               f"{len(templates)} template(s) found",
+               [{"name": t.name, "template_name": t.template_name, "doctype": t.doctype_name,
+                 "auto_send": bool(t.enable_auto_send)} for t in templates])
+        else:
+            warn(key, label, section,
+                 "No WhatsApp templates exist yet. Create one in WhatsApp Template list.",
+                 {})
+    except Exception as e:
+        fail(key, label, section,
+             "Could not query templates",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 10. Scheduled Jobs ──────────────────────────────────────────────────
+    key, label, section = "scheduler_jobs", "Scheduled Jobs Registered", "Scheduler"
+    expected_jobs = [
+        "erpnextwats.erpnextwats.api.process_recurring_messages",
+        "erpnextwats.erpnextwats.api.process_hourly_monitoring",
+        "erpnextwats.erpnextwats.api.process_daily_monitoring",
+        "erpnextwats.erpnextwats.api.process_weekly_monitoring",
+        "erpnextwats.erpnextwats.api.process_dead_stock_daily",
+    ]
+    try:
+        # Read hooks to verify scheduler registration
+        from erpnextwats import hooks as app_hooks
+        scheduler_events = getattr(app_hooks, "scheduler_events", {})
+        all_registered = []
+        for freq, jobs in scheduler_events.items():
+            for job in jobs:
+                all_registered.append({"frequency": freq, "job": job})
+
+        registered_names = [j["job"] for j in all_registered]
+        missing_jobs = [j for j in expected_jobs if j not in registered_names]
+
+        # Also check frappe Scheduled Job Type table
+        try:
+            scheduled_job_types = frappe.get_all("Scheduled Job Type",
+                                                  fields=["name", "method", "frequency", "stopped"],
+                                                  filters={})
+            db_jobs = [{"method": j.method, "frequency": j.frequency, "stopped": j.stopped}
+                       for j in scheduled_job_types if "erpnextwats" in (j.method or "")]
+        except Exception:
+            db_jobs = []
+
+        if not missing_jobs:
+            ok(key, label, section,
+               f"All {len(expected_jobs)} expected scheduler jobs are registered in hooks",
+               {"hooks_registered": all_registered, "db_scheduled_jobs": db_jobs})
+        else:
+            warn(key, label, section,
+                 f"Some jobs may be missing from scheduler: {missing_jobs}",
+                 {"missing": missing_jobs, "hooks_registered": all_registered})
+    except Exception as e:
+        fail(key, label, section,
+             "Could not verify scheduler jobs",
+             {"error": str(e), "traceback": traceback.format_exc()})
+
+    # ── 11. Test Message Send ───────────────────────────────────────────────
+    key, label, section = "test_send", "End-to-End Test Message Send", "Send Test"
+    if not phone_number:
+        warn(key, label, section,
+             "No phone number provided — skipped. Enter a number in the diagnosis page to test sending.",
+             {"hint": "Enter a phone number with country code, e.g. 966501234567"})
+    else:
+        clean_phone = ''.join(filter(str.isdigit, str(phone_number)))
+        if len(clean_phone) < 10:
+            fail(key, label, section,
+                 f"Phone number '{phone_number}' is too short after stripping non-digits ({len(clean_phone)} digits). Use format: 966501234567",
+                 {"input": phone_number, "cleaned": clean_phone})
+        else:
+            msg_text = test_message or "WhatsApp Diagnosis test from ERPNext"
+            payload = {
+                "userId": "shared_company_session",
+                "to": clean_phone,
+                "message": msg_text
+            }
+            send_start = time.time()
+            try:
+                resp = requests.post(
+                    "http://localhost:3000/api/whatsapp/send",
+                    json=payload,
+                    timeout=30
+                )
+                elapsed_ms = int((time.time() - send_start) * 1000)
+                try:
+                    resp_body = resp.json()
+                except Exception:
+                    resp_body = {"raw": resp.text[:1000]}
+
+                if resp.status_code in (200, 201) and resp_body.get("status") in ("success", "sent", "ok", True, "200"):
+                    ok(key, label, section,
+                       f"Message sent to {clean_phone} in {elapsed_ms}ms",
+                       {"phone": clean_phone, "message": msg_text, "response": resp_body, "elapsed_ms": elapsed_ms})
+                elif resp.status_code in (200, 201):
+                    # Gateway said OK but returned a non-success status field — still likely sent
+                    warn(key, label, section,
+                         f"Gateway returned HTTP {resp.status_code} but status field = '{resp_body.get('status')}'. Message may have been sent.",
+                         {"phone": clean_phone, "response": resp_body, "elapsed_ms": elapsed_ms})
+                else:
+                    fail(key, label, section,
+                         f"Send to {clean_phone} failed — HTTP {resp.status_code}",
+                         {
+                             "phone": clean_phone,
+                             "message": msg_text,
+                             "http_status": resp.status_code,
+                             "response": resp_body,
+                             "elapsed_ms": elapsed_ms,
+                             "raw_response": resp.text[:2000]
+                         })
+            except requests.exceptions.ConnectionError as e:
+                fail(key, label, section,
+                     "Cannot reach gateway to send message — gateway is not running",
+                     {"error": str(e), "traceback": traceback.format_exc(), "phone": clean_phone})
+            except requests.exceptions.Timeout:
+                fail(key, label, section,
+                     f"Send request to {clean_phone} timed out after 30 seconds",
+                     {"phone": clean_phone, "traceback": traceback.format_exc()})
+            except Exception as e:
+                fail(key, label, section,
+                     f"Send raised an unexpected exception: {type(e).__name__}",
+                     {"error": str(e), "traceback": traceback.format_exc(), "phone": clean_phone})
+
+    return results
+

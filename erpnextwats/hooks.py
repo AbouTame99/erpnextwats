@@ -41,7 +41,8 @@ app_include_js = "/assets/erpnextwats/js/whatsapp_integration_v2.js"
 # include js in page
 page_js = {
     "bulk-whatsapp": "erpnextwats/page/bulk_whatsapp/bulk_whatsapp.js",
-    "whatsapp-dashboard": "erpnextwats/page/whatsapp_dashboard/whatsapp_dashboard.js"
+    "whatsapp-dashboard": "erpnextwats/page/whatsapp_dashboard/whatsapp_dashboard.js",
+    "whatsapp-diagnosis": "erpnextwats/page/whatsapp_diagnosis/whatsapp_diagnosis.js"
 }
 
 # include js in doctype views
