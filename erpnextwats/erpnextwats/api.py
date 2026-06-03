@@ -4099,14 +4099,21 @@ def run_full_diagnosis(phone_number=None, test_message=None):
     key, label, section = "redis_cache", "Redis Cache", "Core Infrastructure"
     try:
         test_val = "diag_ping_ok"
-        frappe.cache().set("__diag_ping__", test_val, expires_in_sec=30)
-        got = frappe.cache().get("__diag_ping__")
-        if got == test_val or (isinstance(got, bytes) and got.decode() == test_val):
-            ok(key, label, section, "Redis set/get round-trip succeeded", {"wrote": test_val, "read": str(got)})
+        # Try frappe's set_value wrapper first (has expires_in_sec), fall back
+        # to raw redis set() with ex= (seconds) if set_value isn't available.
+        try:
+            frappe.cache().set_value("__diag_ping__", test_val, expires_in_sec=30)
+            got = frappe.cache().get_value("__diag_ping__")
+        except AttributeError:
+            frappe.cache().set("__diag_ping__", test_val, ex=30)
+            got = frappe.cache().get("__diag_ping__")
+        got_str = got.decode() if isinstance(got, bytes) else str(got)
+        if got_str == test_val:
+            ok(key, label, section, "Redis set/get round-trip succeeded", {"wrote": test_val, "read": got_str})
         else:
             warn(key, label, section,
-                 "Redis returned unexpected value (may be version mismatch)",
-                 {"wrote": test_val, "read": str(got)})
+                 "Redis returned unexpected value (possible serialization mismatch)",
+                 {"wrote": test_val, "read": got_str})
     except Exception as e:
         fail(key, label, section,
              "Redis cache is not reachable",
@@ -4151,25 +4158,53 @@ def run_full_diagnosis(phone_number=None, test_message=None):
              {"error": str(e), "traceback": traceback.format_exc()})
 
     # ── 5. Gateway HTTP Health ──────────────────────────────────────────────
+    # Different gateway versions expose different health endpoints — probe all.
     key, label, section = "gateway_health", "Gateway HTTP Health", "WhatsApp Gateway"
     try:
-        r = requests.get("http://localhost:3000/health", timeout=8)
-        if r.status_code == 200:
+        health_candidates = [
+            "http://localhost:3000/health",
+            "http://localhost:3000/api/health",
+            "http://localhost:3000/api/whatsapp/health",
+            "http://localhost:3000/",
+            "http://localhost:3000/api/whatsapp/status",
+        ]
+        health_found = None
+        health_errors = []
+        for ep in health_candidates:
             try:
-                body = r.json()
-            except Exception:
-                body = r.text[:500]
-            ok(key, label, section,
-               f"HTTP /health returned 200",
-               {"status_code": r.status_code, "response": body})
-        else:
+                r = requests.get(ep, timeout=6)
+                if r.status_code != 404:
+                    try:
+                        body = r.json()
+                    except Exception:
+                        body = r.text[:500]
+                    health_found = {"endpoint": ep, "status_code": r.status_code, "response": body}
+                    break
+                else:
+                    health_errors.append({"endpoint": ep, "status_code": 404})
+            except requests.exceptions.ConnectionError as ce:
+                fail(key, label, section,
+                     f"Cannot reach gateway at {ep} — gateway is not running",
+                     {"error": str(ce), "traceback": traceback.format_exc()})
+                health_found = None
+                break
+            except Exception as e2:
+                health_errors.append({"endpoint": ep, "error": str(e2)})
+
+        if health_found:
+            sc = health_found["status_code"]
+            if sc == 200:
+                ok(key, label, section,
+                   f"Gateway responded at {health_found['endpoint']} (HTTP 200)",
+                   health_found)
+            else:
+                warn(key, label, section,
+                     f"Gateway responded at {health_found['endpoint']} with HTTP {sc}",
+                     health_found)
+        elif not any(r.get("key") == key and r.get("status") == "fail" for r in results):
             warn(key, label, section,
-                 f"HTTP /health returned {r.status_code} (not 200)",
-                 {"status_code": r.status_code, "body": r.text[:1000]})
-    except requests.exceptions.ConnectionError as e:
-        fail(key, label, section,
-             "Cannot reach http://localhost:3000/health — gateway is not running or not listening",
-             {"error": str(e), "traceback": traceback.format_exc()})
+                 "No health endpoint found (all returned 404) — gateway is running but has no /health route",
+                 {"tried": health_candidates, "results": health_errors})
     except Exception as e:
         fail(key, label, section,
              "HTTP health check raised an unexpected exception",
@@ -4212,6 +4247,7 @@ def run_full_diagnosis(phone_number=None, test_message=None):
         endpoints_to_try = [
             "http://localhost:3000/api/whatsapp/qr",
             "http://localhost:3000/api/whatsapp/auth-state",
+            "http://localhost:3000/api/whatsapp/session",
             "http://localhost:3000/qr",
         ]
         found = None
@@ -4219,23 +4255,30 @@ def run_full_diagnosis(phone_number=None, test_message=None):
         for ep in endpoints_to_try:
             try:
                 r2 = requests.get(ep, timeout=6)
+                if r2.status_code == 404:
+                    errors.append({"endpoint": ep, "status_code": 404})
+                    continue  # 404 means this route doesn't exist — try next
                 try:
                     body2 = r2.json()
                 except Exception:
                     body2 = {"raw": r2.text[:500]}
                 found = {"endpoint": ep, "status_code": r2.status_code, "body": body2}
                 break
+            except requests.exceptions.ConnectionError:
+                errors.append({"endpoint": ep, "error": "Connection refused"})
+                break
             except Exception as e2:
                 errors.append({"endpoint": ep, "error": str(e2)})
 
         if found:
             ok(key, label, section,
-               f"Auth/QR endpoint {found['endpoint']} returned {found['status_code']}",
+               f"Auth/QR endpoint found: {found['endpoint']} returned HTTP {found['status_code']}",
                found)
         else:
             warn(key, label, section,
-                 "No QR/auth endpoint responded — may not be implemented by this gateway version",
-                 {"tried": endpoints_to_try, "errors": errors})
+                 "No QR/auth endpoint exists on this gateway (all returned 404). "
+                 "This is normal if the gateway handles auth internally at startup.",
+                 {"tried": endpoints_to_try, "results": errors})
     except Exception as e:
         fail(key, label, section,
              "QR/auth state check raised an exception",
