@@ -10,7 +10,16 @@ const port = 3000;
 const SHARED_SESSION_ID = 'shared_company_session';
 
 // Logging setup
-const LOG_DIR = '/cloudclusters/erpnext/frappe-bench/logs/whatsapp_gateway';
+let LOG_DIR = '/cloudclusters/erpnext/frappe-bench/logs/whatsapp_gateway';
+if (!fs.existsSync(LOG_DIR)) {
+    // Dynamic fallback: look for frappe-bench/logs/whatsapp_gateway or create under app directory
+    const relativeLogs = path.resolve(__dirname, '../../../logs/whatsapp_gateway');
+    if (fs.existsSync(path.dirname(relativeLogs)) || fs.existsSync(relativeLogs)) {
+        LOG_DIR = relativeLogs;
+    } else {
+        LOG_DIR = path.resolve(__dirname, '../logs');
+    }
+}
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
 function getLogFile() {
@@ -79,7 +88,17 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ limit: '60mb', extended: true }));
 
-const BASE_AUTH_DIR = '/cloudclusters/erpnext/frappe-bench/whatsapp_auth';
+// Single shared session auth dir
+let BASE_AUTH_DIR = '/cloudclusters/erpnext/frappe-bench/whatsapp_auth';
+if (!fs.existsSync(BASE_AUTH_DIR)) {
+    // Dynamic fallback: look for frappe-bench/whatsapp_auth or create under app directory
+    const relativeAuth = path.resolve(__dirname, '../../../whatsapp_auth');
+    if (fs.existsSync(path.dirname(relativeAuth)) || fs.existsSync(relativeAuth)) {
+        BASE_AUTH_DIR = relativeAuth;
+    } else {
+        BASE_AUTH_DIR = path.resolve(__dirname, '../whatsapp_auth');
+    }
+}
 if (!fs.existsSync(BASE_AUTH_DIR)) fs.mkdirSync(BASE_AUTH_DIR, { recursive: true });
 
 // Single shared session
@@ -504,6 +523,33 @@ app.get('/api/whatsapp/health', (req, res) => {
         info: info,
         message: isHealthy ? 'Session healthy' : 'Session needs attention'
     });
+});
+
+// Get recent logs
+app.get('/api/whatsapp/logs', (req, res) => {
+    try {
+        const logFile = getLogFile();
+        if (!fs.existsSync(logFile)) {
+            return res.json({ status: 'success', logs: [], file: path.basename(logFile) });
+        }
+        const content = fs.readFileSync(logFile, 'utf8');
+        const lines = content.trim().split('\n').filter(Boolean).map(line => {
+            try {
+                return JSON.parse(line);
+            } catch (e) {
+                return { raw: line };
+            }
+        });
+        const limit = parseInt(req.query.limit) || 100;
+        res.json({ 
+            status: 'success', 
+            logs: lines.slice(-limit),
+            file: path.basename(logFile)
+        });
+    } catch (error) {
+        logError('API', error, { endpoint: '/api/whatsapp/logs' });
+        res.status(500).json({ status: 'error', message: error.message });
+    }
 });
 
 async function boot() {

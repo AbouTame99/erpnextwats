@@ -4447,3 +4447,88 @@ def run_full_diagnosis(phone_number=None, test_message=None):
 
     return results
 
+
+@frappe.whitelist()
+def get_gateway_logs(limit=100):
+    """
+    Retrieves the latest gateway logs by calling the gateway's HTTP endpoint.
+    If the gateway is unreachable, falls back to reading the log files directly from disk.
+    """
+    if "System Manager" not in frappe.get_roles():
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    import requests, os, glob, json, traceback
+    
+    # Method 1: Try HTTP request to Node gateway first
+    try:
+        r = requests.get(f"http://localhost:3000/api/whatsapp/logs?limit={limit}", timeout=5)
+        if r.status_code == 200:
+            res_data = r.json()
+            if res_data.get("status") == "success":
+                return {
+                    "status": "success",
+                    "source": "gateway_api",
+                    "logs": res_data.get("logs", []),
+                    "file": res_data.get("file", "unknown")
+                }
+    except Exception:
+        # Gateway might be down or endpoint not reachable, fall back to disk
+        pass
+
+    # Method 2: Disk fallback
+    # Determine the log directory dynamically
+    log_dir = "/cloudclusters/erpnext/frappe-bench/logs/whatsapp_gateway"
+    if not os.path.exists(log_dir):
+        # Go up 4 levels from erpnextwats/erpnextwats/erpnextwats/api.py
+        bench_logs = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "logs", "whatsapp_gateway"))
+        if os.path.exists(bench_logs):
+            log_dir = bench_logs
+        else:
+            app_logs = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logs"))
+            if os.path.exists(app_logs):
+                log_dir = app_logs
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Could not connect to gateway and log directory was not found on disk. Checked: {log_dir}, {bench_logs}, {app_logs}"
+                }
+
+    log_files = glob.glob(os.path.join(log_dir, "gateway_*.log"))
+    if not log_files:
+        return {
+            "status": "success",
+            "source": "disk_fallback_empty",
+            "logs": [],
+            "message": f"Gateway is offline and no log files were found in {log_dir}"
+        }
+
+    try:
+        latest_file = max(log_files, key=os.path.getmtime)
+        with open(latest_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        parsed_logs = []
+        for line in lines[-int(limit):]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_logs.append(json.loads(line))
+            except Exception:
+                parsed_logs.append({"raw": line})
+                
+        return {
+            "status": "success",
+            "source": "disk_fallback",
+            "logs": parsed_logs,
+            "file": os.path.basename(latest_file),
+            "message": "Gateway offline. Loaded logs from disk."
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Gateway offline. Failed to read logs from disk: {str(e)}",
+            "traceback": traceback.format_exc()
+        }
+
+
