@@ -168,12 +168,6 @@
             "options": "Python"
         },
         {
-            "fieldname": "stack_trace",
-            "fieldtype": "Code",
-            "label": "Stack Trace",
-            "options": "Python"
-        },
-        {
             "fieldname": "performance_section",
             "fieldtype": "Section Break",
             "label": "Performance"

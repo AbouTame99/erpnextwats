@@ -253,7 +253,7 @@ function createTemplateDialog(frm, templates, phone) {{
             )
         except Exception as e:
             log_error(
-                activity_type="Template Delete Error",
+                activity_type="System Info",
                 error=e,
                 template=self.name,
                 metadata={"step": "before_delete"}

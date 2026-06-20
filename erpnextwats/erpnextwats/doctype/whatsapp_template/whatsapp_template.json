@@ -28,7 +28,7 @@
         "selected_customers",
         "conditions_section",
         "visual_conditions",
-        "preview_conditions_btn",
+        "conditions_preview_html",
         "matching_docs_preview",
         "condition_examples_section",
         "dead_stock_section",
@@ -388,6 +388,18 @@
             "role": "System Manager",
             "share": 1,
             "write": 1
+        },
+        {
+            "read": 1,
+            "role": "Sales User"
+        },
+        {
+            "read": 1,
+            "role": "Sales Manager"
+        },
+        {
+            "read": 1,
+            "role": "WhatsApp Manager"
         }
     ],
     "sort_field": "modified",

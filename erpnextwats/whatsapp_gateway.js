@@ -387,7 +387,7 @@ class WhatsAppSession {
 
 // Initialize or get shared session
 function getSharedSession() {
-    if (!sharedSession || sharedSession.status === 'disconnected' || sharedSession.status === 'error') {
+    if (!sharedSession || sharedSession.status === 'disconnected' || sharedSession.status === 'error' || sharedSession.status === 'auth_failure') {
         sharedSession = new WhatsAppSession(SHARED_SESSION_ID);
         sharedSession.initialize().catch(e => {
             console.error('[SHARED SESSION] Background init failed:', e.message);
@@ -589,8 +589,8 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`WhatsApp Gateway running on port ${port}`);
+app.listen(port, '127.0.0.1', () => {
+    console.log(`WhatsApp Gateway running on port ${port} (bound to localhost only)`);
     console.log(`Using SHARED SESSION mode - all users share one WhatsApp connection`);
     boot();
 });

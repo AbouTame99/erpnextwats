@@ -22,6 +22,51 @@ except ImportError:
 
 # ===== CORE INFRASTRUCTURE =====
 
+def ensure_db_connection():
+    """Ping the DB and reconnect if the connection went stale (e.g. after a long sleep
+    exceeded MySQL's wait_timeout). Without this, any DB call after a long time.sleep()
+    inside a background job can raise 'MySQL server has gone away' and crash the job
+    silently, leaving WhatsApp Bulk History stuck on 'Processing' forever."""
+    try:
+        frappe.db.sql("SELECT 1")
+    except Exception:
+        try:
+            frappe.connect(site=frappe.local.site)
+        except Exception:
+            pass
+
+
+def safe_sleep(seconds):
+    """Sleep in short chunks, pinging the DB between chunks, so long anti-ban delays
+    (human breaks of up to 20 minutes) don't silently kill the DB connection."""
+    try:
+        seconds = max(0, float(seconds))
+    except (TypeError, ValueError):
+        seconds = 0
+    remaining = seconds
+    chunk = 25
+    while remaining > 0:
+        time.sleep(min(chunk, remaining))
+        remaining -= chunk
+        ensure_db_connection()
+
+
+def safe_save_history(history, retries=3):
+    """Save + commit a WhatsApp Bulk History doc with reconnect-on-failure retries,
+    and stamp last_heartbeat so the UI/watchdog can tell a slow job from a dead one."""
+    for attempt in range(retries):
+        try:
+            history.last_heartbeat = now_datetime()
+            history.save(ignore_permissions=True)
+            frappe.db.commit()
+            return True
+        except Exception as e:
+            frappe.logger().error(f"[BULK] History save failed (attempt {attempt + 1}/{retries}): {e}")
+            ensure_db_connection()
+            time.sleep(2)
+    return False
+
+
 @frappe.whitelist()
 def proxy_to_service(method, endpoint=None, data=None, **kwargs):
     """Proxies request to the Node.js WhatsApp gateway."""
@@ -168,11 +213,11 @@ def smart_delay(sent_count=0, failed_count=0, is_mass_campaign=True):
             activity_type="Retry Attempt",
             metadata={"action": "stealth_human_break", "duration_seconds": break_duration, "sent_in_batch": sent_count}
         )
-        time.sleep(break_duration)
-    
+        safe_sleep(break_duration)
+
     # Random 10% chance of a "mini break" (2-3 minutes)
     if random.random() < 0.1:
-        time.sleep(random.randint(120, 180))
+        safe_sleep(random.randint(120, 180))
             
     return base + random.random()
 
@@ -661,6 +706,11 @@ def get_bulk_progress(history_name):
                     resume_time += timedelta(days=1)
                 resumes_at = str(resume_time)
         
+        seconds_since_update = None
+        last_seen = history.last_heartbeat or history.modified
+        if last_seen:
+            seconds_since_update = int((now_datetime() - last_seen).total_seconds())
+
         return {
             "status": "success",
             "job_status": history.status,
@@ -672,10 +722,115 @@ def get_bulk_progress(history_name):
             "details": details,
             "started_at": str(history.started_at) if history.started_at else None,
             "completed_at": str(history.completed_at) if history.completed_at else None,
-            "resumes_at": resumes_at
+            "resumes_at": resumes_at,
+            "last_heartbeat": str(last_seen) if last_seen else None,
+            "seconds_since_update": seconds_since_update,
+            "error_message": history.error_message if history.status in ("Failed", "Stalled") else None
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+STALE_JOB_THRESHOLD_SECONDS = 25 * 60  # longest possible anti-ban break is ~20 min; give 5 min grace
+
+
+def detect_stalled_bulk_jobs():
+    """
+    Scheduled watchdog. A bulk send job sits in 'Processing' for the whole run,
+    only writing progress between customers. If the RQ worker crashes/restarts
+    mid-job (OOM, bench restart, deploy), the history record is left on
+    'Processing' forever with no further updates - this looked like the job
+    was permanently "stuck" with no way to tell what happened.
+
+    This marks any 'Processing' job whose last_heartbeat is older than
+    STALE_JOB_THRESHOLD_SECONDS as 'Stalled', so the UI can surface it and
+    offer to resume instead of polling silently forever.
+    """
+    try:
+        cutoff = now_datetime() - timedelta(seconds=STALE_JOB_THRESHOLD_SECONDS)
+        stale_jobs = frappe.get_all(
+            "WhatsApp Bulk History",
+            filters={"status": "Processing"},
+            fields=["name", "last_heartbeat", "modified"]
+        )
+        for job in stale_jobs:
+            last_seen = job.last_heartbeat or job.modified
+            if last_seen and last_seen < cutoff:
+                try:
+                    history = frappe.get_doc("WhatsApp Bulk History", job.name)
+                    history.status = "Stalled"
+                    history.error_message = (
+                        f"No progress since {last_seen}. The background worker likely "
+                        f"crashed or restarted mid-job. Use 'Resume Stalled Job' to continue "
+                        f"from where it left off."
+                    )[:140]
+                    history.save(ignore_permissions=True)
+                    frappe.db.commit()
+                    frappe.logger().warning(f"[BULK WATCHDOG] Marked {job.name} as Stalled (last seen {last_seen})")
+                except Exception as e:
+                    frappe.logger().error(f"[BULK WATCHDOG] Failed to mark {job.name} as Stalled: {e}")
+    except Exception as e:
+        frappe.logger().error(f"[BULK WATCHDOG] detect_stalled_bulk_jobs failed: {frappe.get_traceback()}")
+
+
+@frappe.whitelist()
+def resume_stalled_bulk_job(history_name):
+    """
+    Recomputes the remaining (not-yet-processed) recipients for a Stalled or
+    Failed bulk job by replaying its saved filters against the target doctype,
+    then re-enqueues it via the same resume path used for hourly-limit pauses
+    (which preserves existing sent/failed/skipped counts and details).
+    """
+    try:
+        history = frappe.get_doc("WhatsApp Bulk History", history_name)
+        if history.status not in ("Stalled", "Failed", "Paused"):
+            return {"status": "error", "message": f"Job is '{history.status}', not resumable."}
+
+        doctype = history.target_doctype
+        try:
+            filters = json.loads(history.filters_used) if history.filters_used else {}
+        except Exception:
+            filters = {}
+
+        all_docs = frappe.get_all(doctype, filters=filters, fields=["name"]) if isinstance(filters, dict) else []
+        all_names = [d.name for d in all_docs]
+
+        try:
+            details = json.loads(history.details) if history.details else []
+        except Exception:
+            details = []
+        processed_names = {d.get("doc_name") for d in details if d.get("status") in ("Sent", "Failed", "Skipped")}
+
+        remaining = [n for n in all_names if n not in processed_names]
+
+        if not remaining:
+            history.status = "Completed"
+            history.completed_at = now_datetime()
+            history.error_message = None
+            history.save(ignore_permissions=True)
+            frappe.db.commit()
+            return {"status": "success", "message": "No remaining recipients - job marked Completed.", "remaining": 0}
+
+        history.status = "Processing"
+        history.error_message = None
+        history.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        frappe.enqueue(
+            'erpnextwats.erpnextwats.api.resume_bulk_send',
+            history_name=history_name,
+            template_id=history.template,
+            doctype=doctype,
+            remaining_doc_names=remaining,
+            max_per_hour=50,
+            queue='long',
+            job_name=f"whatsapp_bulk_manual_resume_{history_name}",
+            timeout=7200
+        )
+
+        return {"status": "success", "message": f"Resumed with {len(remaining)} remaining recipients.", "remaining": len(remaining)}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "traceback": frappe.get_traceback()}
 
 @frappe.whitelist()
 def get_templates_for_doctype(doctype):
@@ -687,14 +842,16 @@ def get_templates_for_doctype(doctype):
     return templates
 
 @frappe.whitelist()
-def get_bulk_history():
+def get_bulk_history(limit=50):
     """Get all bulk send history."""
     try:
         history = frappe.get_all(
             "WhatsApp Bulk History",
-            fields=["name", "template", "target_doctype", "status", "total_recipients", 
-                    "sent_count", "failed_count", "skipped_count", "started_at", "completed_at"],
-            order_by="started_at desc"
+            fields=["name", "template", "target_doctype", "status", "total_recipients",
+                    "sent_count", "failed_count", "skipped_count", "started_at", "completed_at",
+                    "last_heartbeat", "modified"],
+            order_by="started_at desc",
+            limit_page_length=frappe.utils.cint(limit) or 50
         )
         return {"status": "success", "history": history}
     except Exception as e:
@@ -848,7 +1005,7 @@ def send_via_template_background(doctype, docname, template_id, recipient):
         # Log result
         if result.get("status") == "success":
             log_success(
-                activity_type="Message Sent (BG)",
+                activity_type="Message Sent",
                 template=template_id,
                 customer=doc.customer if hasattr(doc, 'customer') else doc.name,
                 customer_phone=recipient,
@@ -859,7 +1016,7 @@ def send_via_template_background(doctype, docname, template_id, recipient):
             )
         else:
             log_error(
-                activity_type="Message Failed (BG)",
+                activity_type="Message Failed",
                 error=result.get("message", "Unknown error"),
                 template=template_id,
                 customer=doc.customer if hasattr(doc, 'customer') else doc.name,
@@ -1050,9 +1207,35 @@ def send_bulk_messages(template_id, filters=None, doctype=None, customer_list=No
 
 def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hour=50):
     """
+    Entry point for the bulk send RQ job. Wraps the real implementation in a
+    try/except so that ANY uncaught exception (e.g. a DB error, a bug in a
+    downstream call) marks the job as 'Failed' with the real error instead of
+    leaving WhatsApp Bulk History stuck on 'Processing' forever with no
+    explanation - which is what used to happen and looked like the job was
+    "stuck".
+    """
+    try:
+        return _process_bulk_send_impl(history_name, template_id, doctype, doc_names, max_per_hour)
+    except Exception as e:
+        tb = frappe.get_traceback()
+        frappe.logger().error(f"[BULK] FATAL - process_bulk_send crashed for {history_name}:\n{tb}")
+        try:
+            ensure_db_connection()
+            history = frappe.get_doc("WhatsApp Bulk History", history_name)
+            history.status = "Failed"
+            history.error_message = f"Job crashed: {str(e)}"[:140]
+            history.save(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e), "traceback": tb}
+
+
+def _process_bulk_send_impl(history_name, template_id, doctype, doc_names, max_per_hour=50):
+    """
     Process bulk send with hard retry logic and smart anti-ban delays.
     """
-    
+
     # Initialize counters
     sent_count = 0
     failed_count = 0
@@ -1146,9 +1329,8 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                 
                 # Store remaining customers in a way we can retrieve them
                 history.flags.remaining_customers = remaining_customers
-                history.save(ignore_permissions=True)
-                frappe.db.commit()
-                
+                safe_save_history(history)
+
                 # Schedule continuation job for next hour
                 log_message(f"📅 Scheduling resume job in {wait_seconds} seconds...")
                 frappe.enqueue(
@@ -1224,7 +1406,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                         if attempt < 3:
                             delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                             log_message(f"Waiting {delay}s before retry...")
-                            time.sleep(delay)
+                            safe_sleep(delay)
                 
                 except Exception as e:
                     error_msg = str(e)
@@ -1235,7 +1417,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
                     if attempt < 3:
                         delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                         log_message(f"Waiting {delay}s before retry...")
-                        time.sleep(delay)
+                        safe_sleep(delay)
             
             # After 3 attempts
             if not success:
@@ -1250,16 +1432,15 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
             history.failed_count = failed_count
             history.skipped_count = skipped_count
             history.details = json.dumps(details)
-            history.save(ignore_permissions=True)
-            frappe.db.commit()
-            
+            safe_save_history(history)
+
             log_message(f"Progress: {sent_count} sent, {failed_count} failed, {skipped_count} skipped")
             
             # Smart delay before next customer (if not last)
             if idx < len(doc_names) - 1:
                 delay = smart_delay(sent_count, failed_count, is_mass_campaign=True)
                 log_message(f"Waiting {delay}s before next customer...")
-                time.sleep(delay)
+                safe_sleep(delay)
         
         except Exception as e:
             log_message(f"✗ EXCEPTION processing {doc_name}: {str(e)}")
@@ -1273,8 +1454,7 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
             history.failed_count = failed_count
             history.skipped_count = skipped_count
             history.details = json.dumps(details)
-            history.save(ignore_permissions=True)
-            frappe.db.commit()
+            safe_save_history(history)
             continue
     
     # Final update
@@ -1285,9 +1465,8 @@ def process_bulk_send(history_name, template_id, doctype, doc_names, max_per_hou
     history.skipped_count = skipped_count
     history.details = json.dumps(details)
     history.completed_at = end_time
-    history.save(ignore_permissions=True)
-    frappe.db.commit()
-    
+    safe_save_history(history)
+
     log_message("=" * 80)
     log_message("===== Bulk send completed =====")
     log_message(f"Sent: {sent_count}")
@@ -1333,10 +1512,33 @@ def render_template_preview(doctype_name, message, docname):
 
 def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, max_per_hour=50):
     """
+    Entry point for the resume RQ job. Wraps the real implementation in a
+    try/except so an uncaught exception marks the job 'Failed' with the real
+    error instead of leaving it stuck on 'Processing' forever.
+    """
+    try:
+        return _resume_bulk_send_impl(history_name, template_id, doctype, remaining_doc_names, max_per_hour)
+    except Exception as e:
+        tb = frappe.get_traceback()
+        frappe.logger().error(f"[BULK] FATAL - resume_bulk_send crashed for {history_name}:\n{tb}")
+        try:
+            ensure_db_connection()
+            history = frappe.get_doc("WhatsApp Bulk History", history_name)
+            history.status = "Failed"
+            history.error_message = f"Job crashed: {str(e)}"[:140]
+            history.save(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e), "traceback": tb}
+
+
+def _resume_bulk_send_impl(history_name, template_id, doctype, remaining_doc_names, max_per_hour=50):
+    """
     Resume a bulk send job that was paused due to hourly limit.
     This is called automatically after the delay period.
     """
-    
+
     # Initialize counters - will be loaded from history
     sent_count = 0
     failed_count = 0
@@ -1439,9 +1641,8 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
                 history.sent_count = sent_count
                 history.failed_count = failed_count
                 history.skipped_count = skipped_count
-                history.save(ignore_permissions=True)
-                frappe.db.commit()
-                
+                safe_save_history(history)
+
                 # Schedule another resume
                 frappe.enqueue(
                     'erpnextwats.erpnextwats.api.resume_bulk_send',
@@ -1514,7 +1715,7 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
                         if attempt < 3:
                             delay = smart_delay(sent_count, failed_count)
                             log_message(f"Waiting {delay}s before retry...")
-                            time.sleep(delay)
+                            safe_sleep(delay)
                 
                 except Exception as e:
                     error_msg = str(e)
@@ -1525,7 +1726,7 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
                     if attempt < 3:
                         delay = smart_delay(sent_count, failed_count)
                         log_message(f"Waiting {delay}s before retry...")
-                        time.sleep(delay)
+                        safe_sleep(delay)
             
             if not success:
                 log_message(f"✗ FAILED after 3 attempts: {validated_phone}")
@@ -1539,16 +1740,15 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
             history.failed_count = failed_count
             history.skipped_count = skipped_count
             history.details = json.dumps(details)
-            history.save(ignore_permissions=True)
-            frappe.db.commit()
-            
+            safe_save_history(history)
+
             log_message(f"Progress: {sent_count} sent, {failed_count} failed, {skipped_count} skipped (Total: {len(details)})")
             
             # Smart delay before next customer
             if idx < len(remaining_doc_names) - 1:
                 delay = smart_delay(sent_count, failed_count)
                 log_message(f"Waiting {delay}s before next customer...")
-                time.sleep(delay)
+                safe_sleep(delay)
         
         except Exception as e:
             log_message(f"✗ EXCEPTION processing {doc_name}: {str(e)}")
@@ -1561,10 +1761,9 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
             history.failed_count = failed_count
             history.skipped_count = skipped_count
             history.details = json.dumps(details)
-            history.save(ignore_permissions=True)
-            frappe.db.commit()
+            safe_save_history(history)
             continue
-    
+
     # Final update
     end_time = now_datetime()
     history.status = "Completed"
@@ -1573,9 +1772,8 @@ def resume_bulk_send(history_name, template_id, doctype, remaining_doc_names, ma
     history.skipped_count = skipped_count
     history.details = json.dumps(details)
     history.completed_at = end_time
-    history.save(ignore_permissions=True)
-    frappe.db.commit()
-    
+    safe_save_history(history)
+
     log_message("=" * 80)
     log_message("===== Bulk send RESUMED and COMPLETED =====")
     log_message(f"Final: {sent_count} sent, {failed_count} failed, {skipped_count} skipped")
@@ -1993,7 +2191,7 @@ def send_auto_message(doc, template_name):
                 }
             )
             # Transactional messages get fast lanes but still increment quota
-            time.sleep(smart_delay(is_mass_campaign=False))
+            safe_sleep(smart_delay(is_mass_campaign=False))
         else:
             log_error(
                 activity_type="Auto Send Failed",
@@ -2307,7 +2505,7 @@ def process_recurring_to_selected_customers(template_name):
                             
                             if attempt < 3:
                                 delay = smart_delay(sent_count, failed_count)
-                                time.sleep(delay)
+                                safe_sleep(delay)
                     
                     except Exception as e:
                         final_error = str(e)
@@ -2322,7 +2520,7 @@ def process_recurring_to_selected_customers(template_name):
                         )
                         if attempt < 3:
                             delay = smart_delay(sent_count, failed_count)
-                            time.sleep(delay)
+                            safe_sleep(delay)
                 
                 if not success:
                     failed_count += 1
@@ -2348,7 +2546,7 @@ def process_recurring_to_selected_customers(template_name):
                         template=template_name,
                         metadata={"delay_seconds": delay, "customer_index": idx + 1, "total": len(selected_customers), "action": "recurring_delay"}
                     )
-                    time.sleep(delay)
+                    safe_sleep(delay)
                     
             except Exception as e:
                 failed_count += 1
@@ -2438,75 +2636,67 @@ def process_monthly_recurring_enhanced():
 
 
 def check_customer_cooldown(customer, template_name, cooldown_hours):
-    """Check if customer is in cooldown period for this template."""
+    """Check if customer is in cooldown period for this template.
+
+    Must check WhatsApp Activity Log (where individual sends to this customer
+    are logged) filtered BY THIS CUSTOMER - querying WhatsApp Bulk History
+    (which only tracks bulk job-level rows, not per-customer recurring sends,
+    and was never filtered by customer) made this a permanent no-op."""
     try:
         if not cooldown_hours:
             return True
-        
+
         from frappe.utils import add_to_date, now_datetime
-        
-        # Find last sent time
-        last_sent = frappe.db.get_value("WhatsApp Bulk History",
+
+        last_sent = frappe.db.get_value("WhatsApp Activity Log",
             {
                 "template": template_name,
-                "status": ["in", ["Processing", "Completed"]]
+                "customer": customer,
+                "activity_type": "Message Sent",
+                "status": "Success"
             },
-            "completed_at",
-            order_by="completed_at desc"
+            "activity_timestamp",
+            order_by="activity_timestamp desc"
         )
-        
+
         if not last_sent:
             return True
-        
-        # Check if cooldown passed
+
         next_allowed = add_to_date(last_sent, hours=cooldown_hours)
         return now_datetime() >= next_allowed
-        
+
     except Exception as e:
         frappe.logger().error(f"[AUTO-SEND] Error checking cooldown: {str(e)}")
         return True
 
 
 def check_customer_daily_limit(customer, template_name, max_per_day):
-    """Check if customer has exceeded daily limit."""
+    """Check if customer has exceeded daily limit.
+
+    Same fix as check_customer_cooldown: must query WhatsApp Activity Log
+    filtered by this customer, not WhatsApp Bulk History with no customer
+    filter at all."""
     try:
         if not max_per_day:
             return True
-        
+
         today = now_datetime().date()
-        
-        # Count sends today
-        sent_today = frappe.db.count("WhatsApp Bulk History",
+
+        sent_today = frappe.db.count("WhatsApp Activity Log",
             {
                 "template": template_name,
-                "status": ["in", ["Processing", "Completed"]],
-                "creation": ["between", [f"{today} 00:00:00", f"{today} 23:59:59"]]
+                "customer": customer,
+                "activity_type": "Message Sent",
+                "status": "Success",
+                "activity_date": today
             }
         )
-        
+
         return sent_today < max_per_day
-        
+
     except Exception as e:
         frappe.logger().error(f"[AUTO-SEND] Error checking daily limit: {str(e)}")
         return True
-
-
-def send_message_direct(phone, message, template):
-    """Send WhatsApp message directly without document."""
-    try:
-        # Use the existing send_via_template logic but with direct message
-        data = {
-            "userId": "shared_company_session",
-            "to": phone,
-            "message": message,
-            "media": None
-        }
-        
-        result = proxy_to_service("POST", "api/whatsapp/send", data)
-        return result
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 @frappe.whitelist()
@@ -2866,7 +3056,7 @@ def process_single_monitored_template(template):
             # Anti-ban delay between sends
             if sent_count < len(docs):
                 delay = smart_delay(sent_count, failed_count)
-                time.sleep(delay)
+                safe_sleep(delay)
                 
         except Exception as e:
             log_error(
@@ -3141,6 +3331,7 @@ def get_all_customers_with_phones():
             error=e,
             metadata={"error_type": "Dead Stock Customer Query Error"}
         )
+        return []
 
 def optimize_image_data(file_content, max_width=800, max_height=800, max_size_kb=200):
     """
@@ -3291,6 +3482,31 @@ def split_template_message(message):
 
 def send_dead_stock_campaign(template):
     """
+    Crash-safe wrapper around _send_dead_stock_campaign_impl. This job runs for
+    hours (3-5 min stealth delays between customers) on the 'long' queue with no
+    supervisor, so an uncaught exception (e.g. a stale MySQL connection after a
+    long sleep - the same root cause that previously froze bulk sends) would
+    otherwise crash silently with no error recorded anywhere.
+    """
+    try:
+        return _send_dead_stock_campaign_impl(template)
+    except Exception as e:
+        tb = frappe.get_traceback()
+        frappe.logger().error(f"[DEAD STOCK] FATAL - send_dead_stock_campaign crashed for {template.name}:\n{tb}")
+        try:
+            ensure_db_connection()
+            log_error(
+                activity_type="Bulk Send Failed",
+                error=e,
+                template=template.name,
+                metadata={"error_type": "Dead Stock Campaign Crash", "traceback": tb[-2000:]}
+            )
+        except Exception:
+            pass
+
+
+def _send_dead_stock_campaign_impl(template):
+    """
     Send dead stock items to all customers.
     One message per item per customer with anti-ban protection.
     Resumable: if interrupted, skips already-sent recipients for today.
@@ -3349,13 +3565,13 @@ def send_dead_stock_campaign(template):
                 activity_type="Retry Attempt",
                 metadata={"action": "stealth_customer_gap", "duration_seconds": cluster_delay, "customer": customer.name}
             )
-            time.sleep(cluster_delay)
+            safe_sleep(cluster_delay)
 
         if send_style == "All Items in One Message":
             # ===== COMBINED MODE: One message with all items per customer =====
             # Quota Check
             while not check_global_quota(is_mass_campaign=True):
-                time.sleep(120)
+                safe_sleep(120)
 
             # Check if already sent today (use first item as marker)
             if was_dead_stock_sent_today(today_items[0].item_code, customer.name, template.name):
@@ -3420,16 +3636,16 @@ def send_dead_stock_campaign(template):
                             break
                         else:
                             final_error = result.get("message", "Unknown error")
-                            time.sleep(random.randint(5, 15))
+                            safe_sleep(random.randint(5, 15))
                     except Exception as e:
                         final_error = str(e)
-                        time.sleep(random.randint(5, 15))
+                        safe_sleep(random.randint(5, 15))
 
                 if not success:
                     total_failed += 1
 
                 delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
-                time.sleep(delay)
+                safe_sleep(delay)
 
             except Exception as e:
                 total_failed += 1
@@ -3448,7 +3664,7 @@ def send_dead_stock_campaign(template):
                     }
                     greeting_rendered = frappe.render_template(greeting_tpl, greeting_ctx)
                     send_message_direct(customer.mobile_no, greeting_rendered, template)
-                    time.sleep(random.randint(1, 2))
+                    safe_sleep(random.randint(1, 2))
 
                 # 2. Loop through items
                 for idx, item_data in enumerate(today_items):
@@ -3498,11 +3714,11 @@ def send_dead_stock_campaign(template):
                     
                     # Send divider between items (except after last)
                     if idx < len(today_items) - 1:
-                        time.sleep(1.5)
+                        safe_sleep(1.5)
                         send_message_direct(customer.mobile_no, "----------------", template)
-                    
+
                     # Increased delay for media stability (5-8 seconds)
-                    time.sleep(random.randint(5, 8))
+                    safe_sleep(random.randint(5, 8))
 
                 # 3. Send Footer
                 if footer_tpl:
@@ -3519,7 +3735,7 @@ def send_dead_stock_campaign(template):
                 item_code = item_data.item_code
 
                 while not check_global_quota(is_mass_campaign=True):
-                    time.sleep(120)
+                    safe_sleep(120)
 
                 if was_dead_stock_sent_today(item_code, customer.name, template.name):
                     total_sent += 1
@@ -3577,16 +3793,16 @@ def send_dead_stock_campaign(template):
                                 break
                             else:
                                 final_error = result.get("message", "Unknown error")
-                                time.sleep(random.randint(5, 15))
+                                safe_sleep(random.randint(5, 15))
                         except Exception as e:
                             final_error = str(e)
-                            time.sleep(random.randint(5, 15))
+                            safe_sleep(random.randint(5, 15))
 
                     if not success:
                         total_failed += 1
 
                     delay = smart_delay(total_sent, total_failed, is_mass_campaign=True)
-                    time.sleep(delay)
+                    safe_sleep(delay)
 
                 except Exception as e:
                     total_failed += 1

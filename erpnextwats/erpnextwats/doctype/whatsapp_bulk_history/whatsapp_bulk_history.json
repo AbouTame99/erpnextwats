@@ -14,6 +14,7 @@
         "timing_section",
         "started_at",
         "completed_at",
+        "last_heartbeat",
         "counts_section",
         "total_recipients",
         "sent_count",
@@ -46,7 +47,7 @@
             "fieldname": "status",
             "fieldtype": "Select",
             "label": "Status",
-            "options": "Queued\nProcessing\nPaused\nCompleted\nFailed",
+            "options": "Queued\nProcessing\nPaused\nStalled\nCompleted\nFailed",
             "default": "Queued",
             "reqd": 1
         },
@@ -72,6 +73,13 @@
             "fieldtype": "Datetime",
             "label": "Completed At",
             "read_only": 1
+        },
+        {
+            "fieldname": "last_heartbeat",
+            "fieldtype": "Datetime",
+            "label": "Last Heartbeat",
+            "read_only": 1,
+            "description": "Updated every time the job saves progress. Used to detect stalled jobs."
         },
         {
             "fieldname": "counts_section",

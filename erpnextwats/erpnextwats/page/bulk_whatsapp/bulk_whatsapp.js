@@ -610,9 +610,9 @@ erpnextwats.BulkWhatsApp = class {
             callback: (r) => {
                 if (r.message && r.message.status === 'success') {
                     this.renderProgress(r.message);
-                    
-                    // If completed, stop polling
-                    if (r.message.job_status === 'Completed' || r.message.job_status === 'Failed') {
+
+                    // If completed/failed/stalled, stop polling
+                    if (['Completed', 'Failed', 'Stalled'].includes(r.message.job_status)) {
                         this.stopPolling();
                         this.loadHistory();
                     }
@@ -677,13 +677,46 @@ erpnextwats.BulkWhatsApp = class {
                     this.updateProgress();
                 }, 30000); // Check every 30 seconds while paused
             }
+        } else if (jobStatus === 'Stalled') {
+            this.page.main.find('#live-progress-section .card-body h5').html(
+                `<i class="fa fa-exclamation-triangle" style="color: #d9534f;"></i> STALLED - No Progress Detected`
+            );
+
+            if (this.page.main.find('#pause-message').length === 0) {
+                const self = this;
+                const rawMsg = data.error_message || 'The background worker appears to have crashed or restarted mid-job.';
+                const errMsg = $('<div>').text(rawMsg).html();
+                const $msg = $(`
+                    <div id="pause-message" class="alert alert-danger" style="margin-top: 10px;">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <strong>Job stalled!</strong><br>
+                        ${errMsg}<br>
+                        <button type="button" class="btn btn-sm btn-warning" id="resume-stalled-btn" style="margin-top: 8px;">
+                            <i class="fa fa-play"></i> Resume Stalled Job
+                        </button>
+                    </div>
+                `);
+                this.page.main.find('#live-progress-section .card-body').append($msg);
+                $msg.find('#resume-stalled-btn').on('click', function() {
+                    self.resumeStalledJob(self.currentHistoryName);
+                });
+            }
+
+            this.stopPolling();
         } else if (jobStatus === 'Processing') {
             // Reset to normal processing view
+            const lastUpdate = data.seconds_since_update;
+            let heartbeatNote = '';
+            if (lastUpdate !== null && lastUpdate !== undefined) {
+                heartbeatNote = lastUpdate > 120
+                    ? ` <small style="color:#f0ad4e;">(last update ${lastUpdate}s ago - may be in an anti-ban delay)</small>`
+                    : ` <small class="text-muted">(updated ${lastUpdate}s ago)</small>`;
+            }
             this.page.main.find('#live-progress-section .card-body h5').html(
-                `<i class="fa fa-spinner fa-spin"></i> Live Progress`
+                `<i class="fa fa-spinner fa-spin"></i> Live Progress${heartbeatNote}`
             );
             this.page.main.find('#pause-message').remove();
-            
+
             // Reset to normal polling speed
             if (this.pollingInterval) {
                 clearInterval(this.pollingInterval);
@@ -692,7 +725,7 @@ erpnextwats.BulkWhatsApp = class {
                 }, 3000);
             }
         }
-        
+
         // Update table
         const details = data.details || [];
         let html = '';
@@ -737,6 +770,28 @@ erpnextwats.BulkWhatsApp = class {
         this.page.main.find('#progress-table-body').html(html);
     }
 
+    resumeStalledJob(historyName) {
+        frappe.show_alert({ message: 'Resuming stalled job...', indicator: 'blue' });
+        frappe.call({
+            method: 'erpnextwats.erpnextwats.api.resume_stalled_bulk_job',
+            args: { history_name: historyName },
+            callback: (r) => {
+                if (r.message && r.message.status === 'success') {
+                    frappe.show_alert({ message: r.message.message, indicator: 'green' });
+                    this.page.main.find('#pause-message').remove();
+                    this.startPolling();
+                    this.loadHistory();
+                } else {
+                    frappe.msgprint({
+                        title: 'Error',
+                        message: r.message ? r.message.message : 'Unknown error',
+                        indicator: 'red'
+                    });
+                }
+            }
+        });
+    }
+
     loadHistory() {
         frappe.call({
             method: 'erpnextwats.erpnextwats.api.get_bulk_history',
@@ -760,33 +815,43 @@ erpnextwats.BulkWhatsApp = class {
                     'Queued': 'default',
                     'Processing': 'primary',
                     'Paused': 'warning',
+                    'Stalled': 'danger',
                     'Completed': 'success',
                     'Failed': 'danger'
                 }[item.status] || 'default';
-                
+
                 const statusIcon = {
                     'Queued': '',
                     'Processing': '<i class="fa fa-spinner fa-spin"></i> ',
                     'Paused': '<i class="fa fa-pause"></i> ',
+                    'Stalled': '<i class="fa fa-exclamation-triangle"></i> ',
                     'Completed': '',
                     'Failed': ''
                 }[item.status] || '';
-                
+
                 const date = item.started_at ? frappe.datetime.str_to_user(item.started_at) : '-';
-                const progress = item.total_recipients > 0 
+                const progress = item.total_recipients > 0
                     ? Math.round(((item.sent_count + item.failed_count + item.skipped_count) / item.total_recipients) * 100)
                     : 0;
-                
-                // For paused jobs, show progress
+
+                // For paused/stalled jobs, show progress
                 let statusText = item.status;
                 if (item.status === 'Paused') {
                     statusText = `Paused (${progress}%)`;
                 } else if (item.status === 'Processing') {
                     statusText = `Processing (${progress}%)`;
+                } else if (item.status === 'Stalled') {
+                    statusText = `Stalled (${progress}%)`;
                 }
-                
+
+                const resumeBtn = (item.status === 'Stalled' || item.status === 'Failed')
+                    ? `<button class="btn btn-xs btn-warning resume-stalled-history-btn" data-name="${item.name}" style="margin-left: 4px;">
+                            <i class="fa fa-play"></i> Resume
+                        </button>`
+                    : '';
+
                 html += `
-                    <tr class="${item.status === 'Paused' ? 'warning' : ''}">
+                    <tr class="${item.status === 'Paused' ? 'warning' : (item.status === 'Stalled' ? 'danger' : '')}">
                         <td>${date}</td>
                         <td>${item.template}</td>
                         <td>${item.target_doctype}</td>
@@ -802,6 +867,7 @@ erpnextwats.BulkWhatsApp = class {
                             <button class="btn btn-xs btn-default view-details-btn" data-name="${item.name}">
                                 <i class="fa fa-eye"></i> Details
                             </button>
+                            ${resumeBtn}
                         </td>
                     </tr>
                 `;
@@ -815,6 +881,13 @@ erpnextwats.BulkWhatsApp = class {
         this.page.main.find('.view-details-btn').on('click', function() {
             const historyName = $(this).data('name');
             self.viewHistoryDetails(historyName);
+        });
+
+        this.page.main.find('.resume-stalled-history-btn').on('click', function() {
+            const historyName = $(this).data('name');
+            self.currentHistoryName = historyName;
+            self.showLiveProgress();
+            self.resumeStalledJob(historyName);
         });
     }
 

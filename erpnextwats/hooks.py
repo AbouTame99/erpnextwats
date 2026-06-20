@@ -162,7 +162,8 @@ scheduler_events = {
 		"erpnextwats.erpnextwats.api.process_hourly_monitoring",
 		"erpnextwats.erpnextwats.api.process_daily_monitoring",
 		"erpnextwats.erpnextwats.api.process_weekly_monitoring",
-		"erpnextwats.erpnextwats.api.process_dead_stock_daily"
+		"erpnextwats.erpnextwats.api.process_dead_stock_daily",
+		"erpnextwats.erpnextwats.api.detect_stalled_bulk_jobs"
 	],
 	"hourly": [
 		"erpnextwats.erpnextwats.api.process_delayed_messages"
