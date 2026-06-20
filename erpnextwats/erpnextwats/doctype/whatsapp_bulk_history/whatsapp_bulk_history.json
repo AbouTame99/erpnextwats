@@ -47,7 +47,7 @@
             "fieldname": "status",
             "fieldtype": "Select",
             "label": "Status",
-            "options": "Queued\nProcessing\nPaused\nStalled\nCompleted\nFailed",
+            "options": "Queued\nProcessing\nPaused\nStalled\nCompleted\nFailed\nCancelled",
             "default": "Queued",
             "reqd": 1
         },

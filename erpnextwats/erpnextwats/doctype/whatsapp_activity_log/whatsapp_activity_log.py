@@ -23,6 +23,7 @@ class WhatsAppActivityLog(Document):
                 'Bulk Send Started': 'Bulk',
                 'Bulk Send Completed': 'Bulk',
                 'Bulk Send Failed': 'Bulk',
+                'Bulk Send Cancelled': 'Bulk',
                 'Auto Send Triggered': 'Auto Send',
                 'Auto Send Completed': 'Auto Send',
                 'Auto Send Failed': 'Auto Send',

@@ -725,9 +725,49 @@ def get_bulk_progress(history_name):
             "resumes_at": resumes_at,
             "last_heartbeat": str(last_seen) if last_seen else None,
             "seconds_since_update": seconds_since_update,
-            "error_message": history.error_message if history.status in ("Failed", "Stalled") else None
+            "error_message": history.error_message if history.status in ("Failed", "Stalled", "Cancelled") else None
         }
     except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def stop_bulk_send(history_name):
+    """
+    Mark a running/paused/stalled bulk job as Cancelled.
+
+    The background loop in _process_bulk_send_impl / _resume_bulk_send_impl
+    checks the DB status before each customer and exits as soon as it sees
+    Cancelled, so this doesn't kill the worker mid-send - it just stops the
+    job from moving on to the next recipient.
+    """
+    try:
+        history = frappe.get_doc("WhatsApp Bulk History", history_name)
+
+        if history.status in ("Completed", "Failed", "Cancelled"):
+            return {"status": "error", "message": f"Job is already {history.status} and cannot be stopped."}
+
+        history.status = "Cancelled"
+        history.error_message = f"Cancelled by {frappe.session.user} at {now_datetime()}"
+        history.completed_at = now_datetime()
+        safe_save_history(history)
+
+        log_info(
+            activity_type="Bulk Send Cancelled",
+            template=history.template,
+            reference_doctype=history.target_doctype,
+            reference_name=history_name,
+            metadata={
+                "sent": history.sent_count,
+                "failed": history.failed_count,
+                "skipped": history.skipped_count,
+                "total": history.total_recipients
+            }
+        )
+
+        return {"status": "success", "message": "Bulk send stopped."}
+    except Exception as e:
+        frappe.logger().error(f"[BULK] Error stopping job {history_name}: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1291,7 +1331,33 @@ def _process_bulk_send_impl(history_name, template_id, doctype, doc_names, max_p
     for idx, doc_name in enumerate(doc_names):
         log_message("-" * 80)
         log_message(f"Customer {idx+1}/{len(doc_names)}: {doc_name}")
-        
+
+        # Check for user-requested cancellation before touching this customer
+        current_status = frappe.db.get_value("WhatsApp Bulk History", history_name, "status")
+        if current_status == "Cancelled":
+            log_message(f"🛑 Job cancelled by user. Stopping after {idx}/{len(doc_names)} customers.")
+            history.reload()
+            history.sent_count = sent_count
+            history.failed_count = failed_count
+            history.skipped_count = skipped_count
+            history.details = json.dumps(details)
+            history.completed_at = now_datetime()
+            safe_save_history(history)
+            log_info(
+                activity_type="Bulk Send Cancelled",
+                template=template_id,
+                reference_doctype=doctype,
+                reference_name=history_name,
+                metadata={"sent": sent_count, "failed": failed_count, "skipped": skipped_count, "total": len(doc_names)}
+            )
+            return {
+                "status": "cancelled",
+                "history_name": history_name,
+                "sent": sent_count,
+                "failed": failed_count,
+                "skipped": skipped_count
+            }
+
         customer_result = {
             "doc_name": doc_name,
             "customer_name": None,
@@ -1300,7 +1366,7 @@ def _process_bulk_send_impl(history_name, template_id, doctype, doc_names, max_p
             "attempts": 0,
             "error": None
         }
-        
+
         try:
             # Check hourly limit
             current_time = now_datetime()
@@ -1557,23 +1623,28 @@ def _resume_bulk_send_impl(history_name, template_id, doctype, remaining_doc_nam
     # Get history record
     try:
         history = frappe.get_doc("WhatsApp Bulk History", history_name)
-        
+
         # Load previous progress
         sent_count = history.sent_count or 0
         failed_count = history.failed_count or 0
         skipped_count = history.skipped_count or 0
-        
+
         if history.details:
             try:
                 details = json.loads(history.details)
             except:
                 details = []
-        
+
+        # User stopped the job while it was paused - don't resume it
+        if history.status == "Cancelled":
+            log_message(f"Job {history_name} was cancelled while paused. Not resuming.")
+            return {"status": "cancelled", "history_name": history_name, "sent": sent_count, "failed": failed_count, "skipped": skipped_count}
+
         # Update status back to Processing
         history.status = "Processing"
         history.error_message = None  # Clear the pause message
         history.save(ignore_permissions=True)
-        
+
         log_message(f"Resuming job: {history_name}")
         log_message(f"Previous progress: {sent_count} sent, {failed_count} failed, {skipped_count} skipped")
         log_message(f"Remaining customers: {len(remaining_doc_names)}")
@@ -1608,7 +1679,33 @@ def _resume_bulk_send_impl(history_name, template_id, doctype, remaining_doc_nam
     for idx, doc_name in enumerate(remaining_doc_names):
         log_message("-" * 80)
         log_message(f"Customer {idx+1}/{len(remaining_doc_names)} (Total: {len(details) + idx + 1}): {doc_name}")
-        
+
+        # Check for user-requested cancellation before touching this customer
+        current_status = frappe.db.get_value("WhatsApp Bulk History", history_name, "status")
+        if current_status == "Cancelled":
+            log_message(f"🛑 Job cancelled by user. Stopping after {len(details)}/{len(details) + len(remaining_doc_names) - idx} customers.")
+            history.reload()
+            history.sent_count = sent_count
+            history.failed_count = failed_count
+            history.skipped_count = skipped_count
+            history.details = json.dumps(details)
+            history.completed_at = now_datetime()
+            safe_save_history(history)
+            log_info(
+                activity_type="Bulk Send Cancelled",
+                template=template_id,
+                reference_doctype=doctype,
+                reference_name=history_name,
+                metadata={"sent": sent_count, "failed": failed_count, "skipped": skipped_count}
+            )
+            return {
+                "status": "cancelled",
+                "history_name": history_name,
+                "sent": sent_count,
+                "failed": failed_count,
+                "skipped": skipped_count
+            }
+
         customer_result = {
             "doc_name": doc_name,
             "customer_name": None,
